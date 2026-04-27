@@ -1,0 +1,89 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OUTPUT FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Each routine object follow the schema below.
+
+{
+  "category": "<category>",          // e.g. "APP USE", "CONNECTIVITY"
+  "label": "<short human-readable pattern name>",    // e.g. "Weekday wake-up routine"
+  "description": "<description of how the pattern works>",
+  "agent_suggestions": [<actions or suggestions AI agent can proactively take>, ...],  // as many suggestions as possible, don't need reason why it is a good suggestion. comma separated list
+  "occurrences": <int>,                     // how many times the routine was observed 
+  "confidence": "<high|medium|low>",        // based on consistency & sample size. high: observed multiple times, trigger and follow-up actions are strongly consistent, context is stable or clearly repeatable. medium: observed more than once but with some variation, low: no repetition, weak evidence, but pattern is plausible.
+
+  "data": [   // training data list of dictionary for each occurences
+    {
+      "time": "<YY-MM-DD HH:MM>",   // pattern start time
+      "pattern_sequence": [
+        <item 0 = trigger event/context>, // **required**: the item, sign, or context that invokes the pattern sequence. If it is a context that is not explicitly logged as an item(e.g. "around 10:30am, saturday"), write a log item representing the context.
+        <item 1>,   // **required**: should be same as the real user log, without abbreviation or modification.
+        <item 2>,   // optional: should be same as the real user log, without abbreviation or modification.
+        ...,
+      ],
+      "pattern_description": [   // abstraction of each pattern_sequence on the user side. (e.g. "Open YouTube App")
+        "<item 0 description>",
+        "<item 1 description>",
+        "<item 2 description>",
+        ...
+      ]
+      "context": {   
+        // **optionally** put information that are important for this routine but may not in the recent history window, such as:        
+        "time": "<HH:MM-HH:MM>",                  // time range the pattern usually happens 
+        "day": "<Mon/Tue/Wed/Thu/Fri/Sat/Sun>",   // **2026-04-06 is Monday**.
+        "weekend": <true/false>,
+        "sleep_duration_of_day": "<HH:MM>",        
+        "location_id": "Location <int>"           // location the routine happened
+        "connection": <Wifi/Cellular/None>,
+        "bluetooth": <device_name/None>,
+        "schedule": <calendar event>,
+        "moving": <walking/running/in_vehicle>,
+        ...
+      },
+      "reasoning": <prediction (in the future tense) of what items(item[1:]) are likely to happen after item 0> // This will be used as a reasoning data when training LLM to predict the user's next action.
+    },
+    {
+      // Second occurence data
+    },
+    ...
+  ]
+}
+
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OUTPUT EXAMPLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{
+  "category": "CONNECTIVITY",
+  "label": "Earbuds connection followed by media app usage",
+  "description": "User usually connect earbuds and open media app in vehicle. The app differs according to the context, musicmate at night commute time and YouTube app at weekend daytime.",
+  "agent_suggestions": "[Pop up musicmate or youtube app on lock-screen when earbuds connect, Autoplay music, recommend making a routine to play music when earbuds connect, ...]",
+  "occurrences": 3,
+  "confidence": "medium",
+  "data": [
+    {
+      "time": "26-04-16 22:02",
+      "pattern_sequence": [
+        {"time": "26-04-16 22:02", "data_type": "connection", "category": "BLUETOOTH", "event_kind": "ACL_CONNECTED", "device_name": "민주의 Buds2"},
+        {"time": "26-04-16 22:02", "data_type": "app", "package": "musicmate", "type": "ACTIVITY_RESUMED", "class": "IntroActivity"},
+      ],
+      "pattern_description":[
+        "Connect Earbuds",
+        "Open musicmate app"
+      ]
+      "context": {
+        "time": "22:00-22:10",
+        "weekend": false,
+        "moving": "in_vehicle"
+      },
+      "reasoning": "The user usually connect earbuds and open musicmate during night commute time. \
+                    This time the context is in_vehicle at weekday 22:00, which is usual user night commute time, so the user will likely connect earbuds and open musicmate app.",
+    },
+    {
+      //Second Occurence
+    },
+    {
+      //Third Occurence
+    }
+  ]
+}

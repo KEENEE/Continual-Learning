@@ -591,3 +591,73 @@ class CEM(RandomShooting):
             prefix="cem_std",
         )
         metrics_to_log.update(**cem_std_stats)
+
+
+class SupervisedSFT(OptimizationAlgorithm, nn.Module):
+    """Supervised fine-tuning of SVD masks.
+
+    Minimizes -log p(gold_target | prompt) where the gold target comes from
+    `task_loader.get_gold_target(sample)`. Gradient flow is identical to
+    Reinforce: the materialized MLP weights accumulate `.grad`, then
+    `backward(policy, ...)` propagates back into the SVD masks.
+    """
+
+    def __init__(self, policy, gpu, max_grad_norm, lr, **kwargs):
+        nn.Module.__init__(self=self)
+        self.gpu = gpu
+        self.max_grad_norm = float(max_grad_norm)
+        self.lr = lr
+        self.optimizer = torch.optim.Adam(policy.trainable_params, lr=lr)
+
+    def step_optimization(
+        self,
+        model_id,
+        model,
+        tokenizer,
+        policy,
+        task_loader,
+        batch_ix,
+        train_data,
+        train_eval,
+        base_params,
+        decomposed_params,
+        original_model_params,
+        metrics_to_log,
+        vllm_model=None,
+        **kwargs,
+    ):
+        gpu = self.gpu
+        learnable_params = policy.get_learnable_params()
+        forward(policy, model, base_params, decomposed_params, learnable_params)
+
+        prompts = [
+            task_loader.get_prompt(tokenizer, train_data, i, model_id=model_id)
+            for i in batch_ix
+        ]
+        golds = [task_loader.get_gold_target(train_data[i]) for i in batch_ix]
+        B = len(prompts)
+
+        for prompt, gold in zip(prompts, golds):
+            in_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(gpu)
+            full_text = prompt + " " + gold + (tokenizer.eos_token or "")
+            full_ids = tokenizer(full_text, return_tensors="pt").input_ids.to(gpu)
+            P = in_ids.shape[-1]
+            outputs = model(full_ids)
+            logits = outputs.logits[:, P - 1 : -1]
+            log_probs = F.log_softmax(logits, dim=-1)
+            target_ids = full_ids[:, P:]
+            tok_lp = log_probs.gather(2, target_ids.unsqueeze(-1)).squeeze(-1)
+            loss = -(tok_lp.sum() / B)
+            loss.backward()
+            metrics_to_log.update(sft_loss=loss.item())
+        backward(policy, model, base_params, decomposed_params, learnable_params)
+
+    def update(self, policy):
+        torch.nn.utils.clip_grad_norm_(policy.trainable_params, self.max_grad_norm)
+        self.optimizer.step()
+        self.optimizer.zero_grad()
+
+    def log_optim(self, metrics_to_log):
+        metrics_dict = metrics_to_log.get()
+        if "sft_loss" in metrics_dict:
+            print(f"sft_loss={metrics_dict['sft_loss']}")

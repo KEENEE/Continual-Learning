@@ -1,0 +1,13 @@
+task_loader:
+  _target_: tasks.UserBehaviorTask
+  use_reasoning_in_target: false
+  max_stm_tokens: 6000
+  stm_window_days: 7
+  embed_threshold: 0.7
+  embed_model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  stm_coalesce_repeats: true
+  stm_drop_noise_types: true
+  stm_humanize_pkg: true
+
+
+task_name: user_behavior

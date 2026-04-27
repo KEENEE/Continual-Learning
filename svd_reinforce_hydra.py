@@ -103,7 +103,10 @@ def main(cfg):
         group_name = cfg.wandb_group_name
     os.makedirs(log_dir, exist_ok=True)
 
-    vllm_model = task_loader.get_vllm_model(model_id=model_id)
+    vllm_model = task_loader.get_vllm_model(
+        model_id=model_id,
+        tensor_parallel_size=cfg.get("tensor_parallel_size", 1),
+    )
 
     train_eval, *test_evals = task_loader.get_evaluator()
     if task_loader.has_transfer_split:
@@ -115,15 +118,15 @@ def main(cfg):
     gpu = torch.device("cuda:1")
     np_random = np.random.RandomState(seed)
 
-    # cpu + float32 for initial SVD decomposition
+    # GPU + float32 for initial SVD decomposition (cuBLAS-accelerated svd)
     if extract_svd:
         model = AutoModelForCausalLM.from_pretrained(
-            model_id, device_map="cpu", torch_dtype=torch.float32
+            model_id, device_map=gpu, torch_dtype=torch.float32
         )
     else:
         # Load model and tokenizer.
         model = AutoModelForCausalLM.from_pretrained(
-            model_id, device_map="cuda:1", torch_dtype=torch.bfloat16
+            model_id, device_map=gpu, torch_dtype=torch.bfloat16
         )
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     base_params = model.state_dict()
@@ -134,15 +137,17 @@ def main(cfg):
 
     # Load decomposed parameters.
     if not os.path.exists(decomposed_param_file):
-        print("Decomposed params not found. Decomposing...")
+        print("Decomposed params not found. Decomposing on GPU...")
         decomposed_params = {}
         for k, v in base_params.items():
             if "norm" not in k:
                 print(k)
-                U, S, V = torch.svd(v)
-                decomposed_params[f"{k}.U"] = U
-                decomposed_params[f"{k}.S"] = S
-                decomposed_params[f"{k}.V"] = V
+                # torch.linalg.svd is faster than the deprecated torch.svd on GPU.
+                # full_matrices=False -> reduced SVD: O(min(m,n)^2 * max(m,n)).
+                U, S, Vh = torch.linalg.svd(v, full_matrices=False)
+                decomposed_params[f"{k}.U"] = U.to(torch.bfloat16).cpu()
+                decomposed_params[f"{k}.S"] = S.to(torch.bfloat16).cpu()
+                decomposed_params[f"{k}.V"] = Vh.transpose(-2, -1).to(torch.bfloat16).cpu()
         torch.save(decomposed_params, decomposed_param_file)
         print("successfully decomposed model - returning")
         return
@@ -172,6 +177,35 @@ def main(cfg):
         policy=policy,
         gpu=gpu,
     )
+
+    # === Baseline eval — vLLM still has original (un-masked) base weights here. ===
+    baseline_metrics = {}
+    if cfg.get("baseline_eval", True):
+        print("=== Baseline eval (base model, no SVD mask applied) ===")
+        model.eval()
+        if has_training_split:
+            b_train = eval_model(vllm_model, train_eval, train_ix)
+            b_valid = eval_model(vllm_model, train_eval, valid_ix)
+            baseline_metrics["baseline_train_acc"] = b_train.aggregate_metrics[
+                task_loader.target_metric_train
+            ]
+            baseline_metrics["baseline_valid_acc"] = b_valid.aggregate_metrics[
+                task_loader.target_metric_valid
+            ]
+        b_test = eval_model(vllm_model, test_eval)
+        baseline_metrics["baseline_test_acc"] = b_test.aggregate_metrics[
+            task_loader.target_metric_test
+        ]
+        if has_transfer_split:
+            b_transfer = eval_model(vllm_model, transfer_eval)
+            baseline_metrics["baseline_transfer_acc"] = b_transfer.aggregate_metrics[
+                task_loader.target_metric_transfer
+            ]
+        print(f"Baseline metrics: {baseline_metrics}")
+        with open(f"{log_dir}/baseline_eval.json", "w") as f:
+            json.dump(baseline_metrics, f, indent=4)
+        if cfg.wandb_log:
+            wandb.log(baseline_metrics)
 
     if resuming_from_ckpt and os.path.exists(load_ckpt):
         print(f"Starting from checkpoint at: {load_ckpt}")
@@ -277,8 +311,23 @@ def main(cfg):
         if cfg.wandb_log:
             wandb.log(data_dict)
         with open(f"{log_dir}/eval_results.json", "w") as f:
-            json.dump(data_dict, f, indent=4)
+            json.dump({"baseline": baseline_metrics, "trained": data_dict}, f, indent=4)
         print(f"Evaluation results: {data_dict}")
+        if baseline_metrics:
+            print("=== Baseline vs Trained ===")
+            for split in ("train_acc", "valid_acc", "test_acc"):
+                if split in data_dict:
+                    base_v = baseline_metrics.get(f"baseline_{split}", None)
+                    trained_v = data_dict[split]
+                    delta = (
+                        f"  Δ={trained_v - base_v:+.4f}"
+                        if base_v is not None
+                        else ""
+                    )
+                    print(
+                        f"  {split:10s}: base={base_v if base_v is not None else 'n/a'} "
+                        f"-> trained={trained_v:.4f}{delta}"
+                    )
         return
 
     learnable_params = policy.get_learnable_params()
@@ -413,6 +462,13 @@ def main(cfg):
                     task_loader.target_metric_transfer
                 ]
                 data_dict["transfer_at_best_val"] = transfer_at_best
+            print(
+                f"Iter {i} eval | "
+                f"train_acc={data_dict['train_acc']:.4f} | "
+                f"valid_acc={data_dict['valid_acc']:.4f} | "
+                f"test_acc={data_dict['test_acc']:.4f} | "
+                f"best_val={best_val_acc:.4f} (test_at_best={test_at_best:.4f})"
+            )
             if cfg.wandb_log:
                 wandb.log(data_dict)
             with open(f"{log_dir}/reinforce_log.json", "a") as f:

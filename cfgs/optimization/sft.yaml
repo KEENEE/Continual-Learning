@@ -1,0 +1,10 @@
+
+optimization_algorithm:
+  _target_: optim_modules.SupervisedSFT
+  max_grad_norm: ${max_grad_norm}
+  lr: ${lr}
+
+
+max_grad_norm: 1e-3
+lr: 2e-3
+optim_name: SFT-lr${lr}-mGN${max_grad_norm}

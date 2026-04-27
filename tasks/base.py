@@ -94,7 +94,7 @@ class Task(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_vllm_model(self, model_id):
+    def get_vllm_model(self, model_id, tensor_parallel_size=1):
         raise NotImplementedError
 
 
@@ -174,7 +174,8 @@ class FewShotTask(Task):
             model_id=model_id,
         )
 
-    def get_vllm_model(self, model_id):
+    def get_vllm_model(self, model_id, tensor_parallel_size=1):
         return self.wrapped_task.get_vllm_model(
             model_id=model_id,
+            tensor_parallel_size=tensor_parallel_size,
         )

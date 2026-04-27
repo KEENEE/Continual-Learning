@@ -8,3 +8,8 @@ reference_code
 messy_scripts
 *_decomposed_params.pt
 **/__pycache__/
+*.egg-info/
+
+# Personal user data — kept out of source control
+data/
+user_usage_3weeks_compressed.json

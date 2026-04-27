@@ -116,7 +116,7 @@ class AI2ArcTask(Task):
         )
         return prompt
 
-    def get_vllm_model(self, model_id) -> VLLMModel:
+    def get_vllm_model(self, model_id, tensor_parallel_size=1) -> VLLMModel:
         """Load a vLLM model."""
         model = vllm.LLM(
             model_id,
@@ -124,6 +124,7 @@ class AI2ArcTask(Task):
             gpu_memory_utilization=0.8,
             enforce_eager=True,
             dtype="bfloat16",
+            tensor_parallel_size=tensor_parallel_size,
             download_dir=get_download_dir(),
         )
         chat_template = self.model_to_template[model_id]

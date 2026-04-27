@@ -30,6 +30,7 @@ wandb_log: true # enabled by default
 wandb_project: shakeoff
 wandb_group_name: ${exp_name}
 extract_svd: false
+tensor_parallel_size: 1
 
 out_dir: results
 

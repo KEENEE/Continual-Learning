@@ -128,6 +128,13 @@ def main(cfg):
         model = AutoModelForCausalLM.from_pretrained(
             model_id, device_map=gpu, torch_dtype=torch.bfloat16
         )
+        # Gradient checkpointing trades ~30% compute for ~50-60% activation
+        # memory savings during backward — required for long-context training
+        # (e.g., user_behavior 7K-token prompts) on a single 80GB GPU.
+        model.config.use_cache = False
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     base_params = model.state_dict()
 

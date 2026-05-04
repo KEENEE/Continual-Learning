@@ -1,0 +1,2135 @@
+
+## A1. Morning Routine (Wake → Leave Home)
+
+PATTERN TASK ID: A1
+PATTERN NAME: Morning Routine (Wake → Leave Home)
+TAXONOMY: Temporal Routine Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures the user's habitual sequence of actions from the moment they wake up (sleep record ends / first screen unlock / first app activity after a sleep period) until they depart from their home location. 
+The morning routine is one of the most predictable windows in a person's day because it is time-pressured and repeated almost identically on similar day-types (weekday vs. weekend). 
+Capturing this chain enables the assistant to proactively surface information (weather, commute ETA, calendar preview, news briefing) at exactly the right micro-moment.
+
+SCOPE BOUNDARY: This task covers ONLY the wake-to-departure window. It must NOT overlap with:
+  - D2 (post-wake routine chain) — D2 focuses narrowly on the first 5 minutes after waking (sleep end → screen on → first 2-3 app opens). A1 covers the ENTIRE morning arc including later actions like checking calendar, opening maps, leaving home.
+  - C1 (commute departure) — C1 starts at the moment the user leaves home. A1 ends there.
+
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "Every weekday, user wakes at ~07:20, unlocks phone within 2 min, opens KakaoTalk, then checks Instagram for 5-8 min, opens Weather app, then opens Naver Map at ~07:55 right before departing home (location change detected at ~08:05)."
+2. "On weekends, user wakes ~10:00-10:30, stays in bed browsing YouTube for 20-40 min before any other app, never opens Maps before noon."
+3. "After waking, user always dismisses overnight notifications (KakaoTalk, news) within the first 3 minutes, then opens a finance app (Bithumb or BankSalad) before doing anything else."
+4. "User checks apartment-related notification (Hogangnono real-estate app) every morning within 15 min of waking."
+5. "Morning app sequence is consistently: Messaging → Finance → News → Maps → (leave home)."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [5] Sleep records: use `time` (sleep start) and `time_wakeup` to anchor wake moment.
+  - [1] App Usage: all events from wake time until departure.
+  - [3] Location: detect home location (the location_label where sleep occurs) and the first significant location change after wake.
+  - [0] Notifications: which notifications arrived overnight and which ones the user interacts with first after waking.
+
+SECONDARY:
+  - [7] Calendar: any morning calendar events that might alter the routine.
+  - [4] Movement: walking/in_vehicle detection that marks departure.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+The trigger for a morning routine is ONE of the following (pick the earliest available signal):
+  1. Sleep record's `time_wakeup` field.
+  2. First event after a gap of ≥3 hours of no activity (indicating overnight sleep even if no formal sleep record exists).
+  3. First APP event after the sleep window.
+
+END BOUNDARY:
+  The morning routine ends at the EARLIEST of:
+  a. First location change away from the home location (distance_moved > 200m from home coordinates).
+  b. If the user does not leave home (weekend/holiday/remote-work), end the window at the point where the user's app-usage pattern shifts from "morning prep" apps to "leisure/work" apps — operationally, cap at wake + 2 hours if no departure is detected.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — Identify all wake events across the 4 weeks window.
+  For each day, record: date, day-of-week, weekend flag, wake time, sleep duration.
+
+STEP 2 — For each wake event, collect ALL log entries from wake_time to end_boundary (as defined above). This is the candidate morning-routine window.
+
+STEP 3 — Normalize each morning window into an ordered action list:
+  - Merge consecutive RESUMED events for the same app into a single "session" with start and duration.
+  - Note notification interactions (seen=true with reason=click) and their timestamps relative to wake.
+  - Note connectivity changes.
+  - Note location changes.
+
+STEP 4 — Align and compare morning windows across days.
+  - **Separate weekdays and weekends**, but do not separate by day of the week. (2026-04-06 is **Monday**. Double check the day of the week from this hint.).
+  - For each group, look for:
+    a. Consistent app-open ORDER (even if absolute times shift, does the relative sequence stay the same?).
+    b. Consistent TIME OFFSETS from wake (e.g., always opens Maps 30-40 min after waking).
+    c. Consistent notification triage behavior (which notification categories get clicked first?).
+    d. Consistent total duration of morning routine (wake-to-departure delta).
+
+STEP 5 — Identify VARIANTS and CONDITIONS.
+  - Does a shorter sleep duration (< user's median) change the morning routine? (e.g., skip news, go straight to Maps).
+  - Does a calendar event in the morning (e.g., early meeting) compress or alter the sequence?
+  - Does a specific notification (e.g., finance alert) cause the user to insert an extra app session?
+
+STEP 6 — For each discovered sub-pattern, assemble the output object:
+  - the wake or condition event (with time and context).
+  - `pattern_sequence`: the ordered list of actions from trigger to end boundary.
+  - `context`: include day-of-week, weekend flag, sleep_duration, home location_id, connection type.
+  - `pattern_description`: abstract each action (e.g., "Open KakaoTalk", "Check Bithumb notification", "Open Naver Map", "Depart home").
+  - `reasoning`: explain why this sequence is expected given the context.
+
+STEP 7 — Validate: discard any pattern with fewer than 2 occurrences. Assign confidence:
+  - high: appears on ≥70% of applicable days with consistent sequence.
+  - medium: appears on 40-69% of applicable days or with minor variations.
+  - low: appears on 2-3 days only, or with significant variation.
+
+IMPORTANT NOTES:
+- Focus your description and prediction on the FULL morning flow, not just the first 2-3 minutes. D2 will zoom into the micro-chain.
+- If the user works from home on certain days (no location change detected), still extract the morning routine up to the 2-hour cap — these "no-commute mornings" are a valuable variant.
+- Pay attention to notification dismissal vs. app usage patterns in the morning — this reveals priority/triage behavior unique to this user.
+
+
+
+
+## A2. Midday / Lunch Routine
+
+```
+PATTERN TASK ID: A2
+
+PATTERN NAME: Midday / Lunch Routine
+TAXONOMY: Temporal Routine Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures the user's recurring behavior during the midday period, roughly 11:00–14:00. 
+The lunch routine often involves a location change (leaving workplace to a restaurant or café), specific app usage (food delivery apps, restaurant search, payment apps), 
+communication bursts (coordinating lunch with colleagues), and post-lunch behavior (coffee order, short walk, brief social media check). 
+Identifying this pattern enables the assistant to suggest restaurants, pre-fill delivery orders, or remind the user of afternoon calendar events as lunch ends.
+
+SCOPE BOUNDARY: This task covers the 11:00–14:00 window broadly. It must NOT overlap with:
+  - A8 (weekday working hours) — A8 covers generic work-hour behavior EXCLUDING the lunch break. A2 specifically targets the lunch-break interruption.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "Every weekday around 12:00-12:15, user opens a food delivery app (Baemin/Yogiyo), places an order, then switches to YouTube for 15-20 min while waiting."
+2. "User leaves workplace location at ~12:30, moves to a nearby restaurant cluster, returns at ~13:20, then opens a café app (Starbucks) for a coffee order."
+3. "Lunch break always starts with a group chat burst (3-5 messages in the 'team lunch' chat), followed by location departure within 10 min."
+4. "On days the user skips lunch out (no location change 11:00-14:00), they order delivery and browse Instagram for 20+ min — different from days they eat out."
+5. "Post-lunch, user consistently opens a news app or finance app between 13:00-13:30 before resuming work apps."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [1] App Usage: all events in the 11:00–14:00 window. Look for food/delivery/restaurant/payment apps.
+  - [3] Location: any departure from and return to the workplace(Location 1) or any primary location .
+  - [4] Movement: walking activity around 12:00-13:00 (walking to restaurant).
+  - [0] Notifications: lunch-coordination messages, delivery status notifications, payment confirmations.
+  - [6] Calls: short calls around noon (coordinating lunch).
+  - [7] Calendar: lunch meetings or blocked lunch slots.
+
+SECONDARY:
+  - [2] Network: Wifi disconnect/reconnect at workplace (signals leaving and returning).
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+Possible triggers for the lunch routine:
+  1. TIME-BASED: The clock hitting a consistent time (e.g., 12:00 ± 15 min) on weekdays.
+  2. APP-BASED: Opening a food-related app or messaging app with lunch-coordination content.
+  3. LOCATION-BASED: Departure from home/workplace location during the 11:00-14:00 window.
+  4. NOTIFICATION-BASED: A message in a group chat that historically precedes lunch departure.
+  5. CALENDAR-BASED: A "lunch" or "식사" calendar event.
+
+END BOUNDARY:
+  The lunch routine ends when:
+  a. User returns to workplace location in weekdays or home location in weekend OR
+  b. User resumes work-related app usage (if remote/WFH), OR
+  c. 14:00, whichever comes first.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — For each of the 28 days, extract all log entries between 11:00 and 14:00.
+
+STEP 2 — Classify each day's midday window:
+  a. "Eat-out day": location change detected away from primary daytime location.
+  b. "Delivery day": food delivery app opened but no location change.
+  c. "Skip/unclear": no food-related signal detected.
+  d. "Weekend/holiday": different baseline expected.
+
+STEP 3 — For each category, align the action sequences:
+  - What app or event marks the START of lunch behavior? (First non-work app? First food app? First location departure?)
+  - What is the sequence of apps/actions during lunch?
+  - What marks the END of lunch? (Return to workplace? Resume of work app?)
+  - How long is the lunch break (departure-to-return or first-food-app to first-work-app)?
+
+STEP 4 — Look for consistent sub-patterns:
+  a. Pre-lunch coordination: Does the user always message someone before lunch? Same group chat?
+  b. During-lunch media: Does the user watch YouTube or browse social media while eating?
+  c. Post-lunch ritual: Coffee order? Specific app? Short walk?
+  d. Lunch timing drift: Does lunch start later on certain days (e.g., meeting-heavy days)?
+
+STEP 5 — Check for CONDITIONAL variants:
+  - Does weather or day-of-week affect eat-out vs. delivery choice?
+  - Does a morning calendar event (e.g., meeting ending at 12:30) shift lunch timing?
+  - On weekends, is there a different lunch pattern (later, longer, different apps)?
+
+STEP 6 — Assemble output objects for each discovered pattern. Each occurrence should include:
+  - the event that initiates lunch behavior.
+  - `pattern_sequence`: full lunch action chain.
+  - `pattern_description`: abstracted next actions (e.g., "Open Baemin delivery app", "Depart to restaurant area", "Open YouTube", "Return to office", "Order coffee on Starbucks app").
+  - `context`: day-of-week, weekend flag, location_id, any relevant calendar event.
+  - `reasoning`: explain why this sequence is expected given the context.
+
+STEP 7 — Validate ≥2 occurrences. Assign confidence based on consistency across applicable days.
+
+IMPORTANT NOTES:
+- On weekends and holidays, the user may not have a structured lunch routine. If a weekend lunch pattern exists, report it separately with weekend=true context.
+- Food delivery app names in Korea include 배달의민족 (Baemin), 요기요 (Yogiyo), 쿠팡이츠 (Coupang Eats). Also look for 카카오톡 order features.
+- Payment notifications (삼성카드, etc.) around lunchtime can confirm a purchase even if no food app was opened.
+```
+
+
+---
+
+## A3. Afternoon Routine
+
+```
+PATTERN TASK ID: A3
+PATTERN NAME: Afternoon Routine
+TAXONOMY: Temporal Routine Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures recurring user behavior during the afternoon window, approximately 14:00–17:30 on weekdays and 13:00–17:30 on weekends. 
+The afternoon is often the least structured part of the day, but users still exhibit micro-routines: 
+a post-lunch energy dip leading to specific app usage (social media, news), a mid-afternoon coffee break, 
+checking financial markets before close (weekday 15:30 KST for Korean stock market), or a pre-departure routine as the workday winds down. 
+
+SCOPE BOUNDARY:
+  - Starts around 13:00, ends where A4 (dinner) begins (~17:30) or C2 (commute home) begins, whichever is earlier.
+
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "Every weekday around 14:30-15:00, user opens Instagram or Twitter for a 5-10 min break, then returns to work apps."
+2. "User checks stock/crypto app (Bithumb) around 15:00-15:30 (Korean market close) on weekdays."
+3. "Around 16:00, user opens a café/coffee app to order afternoon coffee — this happens 4 out of 5 weekdays."
+4. "On weekends, user leaves home around 14:00-15:00 for errands (location changes to shopping areas)."
+5. "User starts winding down work at ~17:00: switches from work apps to messaging apps, checks evening plans in calendar."
+6. "On Fridays specifically, user opens a restaurant reservation app around 16:00 (planning weekend dining)."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [1] App Usage: all events 13:00–17:30. Identify work vs. non-work app clusters.
+  - [0] Notifications: which notifications get clicked vs. dismissed in this window.
+  - [3] Location: any mid-afternoon location changes (errands, coffee run, gym).
+
+SECONDARY:
+  - [7] Calendar: afternoon meetings or events that structure the window.
+  - [2] Network: connectivity changes suggesting movement.
+  - [4] Movement: walking/vehicle activity mid-afternoon.
+  - [6] Calls: afternoon call patterns.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+Afternoon micro-routines may be triggered by one of these.
+  1. Return to office(Location1)
+  2. specific clock times (e.g., 15:00 market close, 16:00 coffee break).
+  3. NOTIFICATION: a specific recurring notification (e.g., stock alert, delivery arrival).
+  4. DURATION: after N hours of continuous work-app usage, user takes a break.
+
+END BOUNDARY:
+  - First signal of commute-home preparation (opening Maps, location departure from workplace), OR
+  - 17:30 if no departure signal.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — For each day, extract all events in the 14:00–17:30 window. Tag each day as weekday/weekend/holiday.
+
+STEP 2 — Identify "break" micro-sessions: any non-work app usage lasting >1 min surrounded by work-app usage. Log the break app, start time, duration, and what preceded/followed it.
+
+STEP 3 — Look for time-anchored habits:
+  - Bin events into 30-min slots (14:00, 14:30, 15:00, ..., 17:00).
+  - For each slot, count which apps appear across multiple days. If an app appears in the same slot on ≥2 days, flag it as a candidate afternoon habit.
+
+STEP 4 — Look for sequence patterns:
+  - What is the common behavior the user do afternoon?
+  - Does a sleep duration change the pattern?
+  - Is there a consistent "wind-down" sequence in the last 30 min before departure?
+
+STEP 5 — Weekend afternoon: separately analyze weekend days.
+  - Does the user leave home for errands? What apps are used before departure (shopping list, maps)?
+  - Is there a consistent weekend afternoon leisure pattern (cafe, gaming, reading)?
+
+STEP 6 — Assemble output objects. For each pattern:
+  - Clearly distinguish weekday vs. weekend occurrences.
+  - In `context`, note if a calendar event preceded the pattern.
+  - In `prediction`, be specific: "Open Bithumb to check crypto prices", not "Check finance app".
+
+STEP 7 — Validate ≥2 occurrences. Assign confidence.
+
+IMPORTANT NOTES:
+- The afternoon is often less patterned than morning or evening. Look carefully for micro-breaks and time-anchored checks (finance, social media).
+- Korean stock market closes at 15:30 KST — if the user trades or monitors stocks, this is a strong time anchor.
+- Distinguish between "afternoon routine on a normal workday" vs. "afternoon on a irregular day" if unique data discovered.
+```
+
+---
+
+## A4. Dinner Time Routine
+
+```
+PATTERN TASK ID: A4
+PATTERN NAME: Dinner Time Routine
+TAXONOMY: Temporal Routine Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures the user's recurring behavior around dinner time, approximately 17:30–20:00. 
+This window includes dinner preparation or ordering, mealtime media consumption, and post-dinner transition into evening leisure. 
+The dinner routine is valuable for suggesting recipes or restaurants, timing smart-home actions (lights, music), and knowing when the user transitions from "productive" to "relaxation" mode.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "User calls a family member (parent) between 18:00-19:00 on weekdays while commuting or right after arriving home."
+2. "During dinner (19:00-20:00), user watches YouTube or Netflix — the longest continuous media session of the day."
+3. "On Fridays and Saturdays, user goes to a restaurant (location change to dining area) instead of ordering delivery."
+4. "Post-dinner, user always opens a messaging app (KakaoTalk) for 5-10 min, then transitions to Instagram."
+5. "User orders coffee/dessert around 19:30-20:00 after finishing dinner — detected via payment notification or café app."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [1] App Usage: food apps, media apps, messaging apps in the 17:30–20:30 window.
+  - [3] Location: arrival at home, or departure to restaurant.
+  - [0] Notifications: payment confirmations, dinner-coordination messages.
+  - [4] Movement: transition with walking or in_vehicle.
+
+SECONDARY:
+  - [6] Calls: dinner-time calls (family, friends).
+  - [7] Calendar: dinner plans, social events.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. Location change (strongest trigger for dinner routine).
+  2. TIME: consistent dinner-start time (e.g., 18:30 ± 20 min).
+  3. APP: opening a food app or recipe app.
+  4. CALL: calling may signal user's dinner plan or call routine.
+
+END BOUNDARY:
+  - Transition to non-food, non-meal-related leisure (e.g., sustained social media or entertainment app usage without food-app interspersion).
+  - Operationally: ~20:00–20:30 or when the user's app pattern shifts to evening-leisure mode.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — For each day, identify the dinner window:
+  - Find home-arrival time (location + network change) or, if user was already home, use 17:30 as start.
+  - Collect all events from dinner-start to 20:30.
+
+STEP 2 — Classify dinner type for each day:
+  a. "Eat-out": location change to a non-home, non-work location during 17:30-20:30.
+  b. "Cook-at-home": no food app, no location change (may see recipe app or no food signal at all).
+  c. "Social dinner": calendar event or group chat coordination + eat-out.
+
+STEP 3 — For each dinner type, extract the action sequence:
+  - Pre-dinner: what happens in the 15 min before food-related activity? (Commute arrival? Changing clothes = no phone activity for 5 min?)
+  - During dinner: silent or media consumption? (which app, how long).
+  - Post-dinner: first app opened after the meal-media session ends.
+
+STEP 4 — Look for day-of-week variations:
+  - Weekday dinner vs. weekend dinner.
+  - Friday dinner (often social/eat-out).
+  - Specific day patterns (e.g., every Wednesday = late work, dinner after 20:00).
+
+STEP 5 — Look for communication patterns around dinner:
+  - Does the user call parents/partner at a consistent time?
+  - Does a KakaoTalk message trigger a unique dinner pattern?
+
+STEP 6 — Assemble output objects with full context. Include dinner-type classification in context.
+
+STEP 7 — Validate ≥2 occurrences. Assign confidence.
+
+IMPORTANT NOTES:
+- Dinner is highly variable by day-of-week. Separate weekday and weekend patterns.
+- Payment notifications in this window are strong signals of food purchase even without a food app open. No payment also signals meaningful dinner pattern.
+- If the user lives alone vs. with family, dinner patterns differ significantly. Infer from data: if calls to "아빠" (dad) or "엄마" (mom) happen from home location, user likely lives alone and calls family. If no such calls and no delivery apps, user may eat with household members.
+```
+
+---
+
+## A5. Evening Routine
+
+```
+PATTERN TASK ID: A5
+PATTERN NAME: Evening Routine
+TAXONOMY: Temporal Routine Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures the user's habitual behavior during the evening leisure window, approximately 20:00–00:00 (or until the pre-sleep routine begins). 
+The evening is typically the longest unstructured personal time, and users develop strong habits: latenight work, workout, binge-watching, social media, gaming, reading, personal finance review, online shopping, or side-project work. 
+Understanding evening patterns helps the assistant suggest content, manage screen-time reminders, prepare next-day briefings, and trigger smart-home automations (dim lights, set alarm).
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "Every evening 20:30-22:00, user usually go to Location 3 before go home(Location 10). (Probably workout, 60-90 min)."
+2. "After YouTube session, user switches to Instagram for 20-30 min, then to a webtoon/reading app."
+3. "User usually go home late, following similar in_vehicle path"
+4. "Evening music listening (FLO app) starts around 22:00 and continues until sleep — background music while doing other things."
+5. "User does online shopping (Coupang, Musinsa) on weekend evenings more than weekday evenings."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [1] App Usage: all events 20:00–00:00+. Focus on session durations, app sequences, and dominant apps.
+  - [0] Notifications: evening notifications that get clicked (content recommendations, social interactions, deal alerts).
+  - [3] Location: at home or workplace? any departure is notable (evening outing).
+
+SECONDARY:
+  - [2] Network: should be on home Wifi; any change is notable.
+  - [7] Calendar: next-day events that might cause the user to prepare (set alarm, check route).
+  - [5] Sleep: tomorrow's wake time (if alarm data available) may influence when the user starts winding down.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. TIME: the evening block starts at a relatively consistent time after dinner.
+  2. APP TRANSITION: switching from dinner-associated apps to evening-leisure apps.
+  3. CONTEXT: move to workplace / home / 3rd places
+
+END BOUNDARY:
+  - The start of D1 (pre-sleep routine): typically marked by the user's last "active" app session before a prolonged screen-off or KEYGUARD_SHOWN that leads to sleep.
+  - If the user stays up past midnight, events after 00:00 belong to A6 (late-night pattern).
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — For each day, extract all events from 20:00 to midnight.
+
+STEP 2 — Compute app-session summaries:
+  - For each app, calculate total foreground time in the evening window.
+  - Rank apps by total evening usage across all 28 days. The top 5 are the user's "evening staple apps."
+
+STEP 3 — Extract app-transition sequences:
+  - List the order of app sessions each evening (ignoring sub-30-second app opens as accidental/transitional).
+  - Align sequences across days. Look for consistent ordering (e.g., YouTube → Instagram → Hogangnono → FLO).
+
+STEP 4 — Identify time-anchored evening habits:
+  - Bin into 30-min slots. For each slot, which app dominates across multiple days?
+  - Is there a consistent "phase transition" time (e.g., 22:00 = switch from video to social media)?
+
+STEP 5 — Look for notification-driven evening behavior:
+  - Which notification types get clicked in the evening? (Social notifications → open KakaoTalk? Deal alerts → open shopping app?)
+  - Does a specific notification reliably trigger a 10+ min app session?
+
+STEP 6 — Weekend vs. weekday evening:
+  - Do weekday evenings end earlier (user sleeps earlier for work)?
+  - Are weekend evenings longer with different app mix (more gaming, shopping, social)?
+
+STEP 7 — Assemble output objects. In `prediction`, capture the evening flow:
+  e.g., "Watch YouTube for ~60 min" → "Browse Instagram for ~20 min" → "Check Bithumb crypto prices" → "Listen to FLO music" → "Begin pre-sleep wind-down."
+
+STEP 8 — Validate ≥2 occurrences. Assign confidence.
+
+IMPORTANT NOTES:
+- Evening routines are often the most consistent and longest patterns. Prioritize capturing the dominant app sequence.
+- Music apps (FLO) running in background while other apps are in foreground is common — detect this via FOREGROUND_SERVICE_START for music apps concurrent with other app ACTIVITY_RESUMED events.
+- The sample data shows FLO and YouTube used around 00:47 — this may be an evening-to-late-night transition. Check if this is typical.
+```
+
+---
+
+## A6. Late-Night / After-Midnight Pattern
+
+```
+PATTERN TASK ID: A6
+PATTERN NAME: Late-Night / After-Midnight Pattern
+TAXONOMY: Temporal Routine Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures user behavior occurring after 22:00 and before sleep onset. 
+Many users have a distinct late-night behavioral mode that differs from their regular evening routine: more impulsive browsing, late-night shopping, doom-scrolling social media, checking crypto/stock prices during off-hours markets, or consuming content they wouldn't during the day. 
+Late-night patterns are especially important because they directly impact sleep quality and next-day behavior (see D3, D4). 
+Detecting these patterns enables the assistant to issue gentle wind-down reminders, suggest sleep-friendly alternatives, or predict next-day sluggishness.
+
+SCOPE BOUNDARY:
+  - Starts at 00:00 (midnight).
+  - Ends at sleep onset (from sleep record) or last screen-off before a gap of ≥3 hours.
+  - Must NOT overlap with A5 (evening routine, which ends at 00:00) or D1 (pre-sleep routine, which covers the final 15-30 min wind-down). A6 covers the BULK of post-midnight activity, while D1 covers only the terminal sequence.
+  - If the user is already asleep before midnight, there is no A6 pattern for that day.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "User stays up past midnight 4-5 nights per week. Post-midnight app usage is dominated by YouTube (long-form content) and Dialer."
+2. "On nights the user is still awake at 01:00+, they tend to check Bithumb (crypto) — possibly monitoring overnight market movements."
+3. "Late-night sessions (past 01:00) are followed by shorter sleep durations (< 6 hours) and later wake times."
+4. "User listens to Youtube or call log, if the user can't fall asleep"
+5. "The user's last app before sleep is consistently dialer at late nights, vs. YouTube on earlier nights."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [1] App Usage: all events from 22:00 to sleep onset. Focus on which apps are used and session durations.
+  - [5] Sleep: sleep start time and duration — critical for correlating late-night behavior with sleep impact.
+  - [0] Notifications: late-night notifications that get interacted with (who messages the user?).
+  - [6] Calls: late-night calls (partner, family, etc).
+  - [3] Location: user should be at home; any late-night location change is highly notable.
+  - Movement: does the movement happens at late night? why the user go out and do what?
+
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — For each day, check if the user has any movement activity between 22:00 and 05:00. 
+If yes, it signals the start of unique pattern. If not, that will be at-home before-sleep pattern.
+
+STEP 2 — For each pattern, extract:
+  - All app events from 00:00 to sleep onset.
+  - The sleep record for that night (start time, duration, confidence).
+  - The next morning's wake time and first actions (to correlate with D3 ripple effects).
+
+STEP 3 — Characterize the late-night session:
+  - Total active screen time post-midnight.
+  - Dominant apps (by foreground time).
+  - Number of app switches (high switching = restless browsing; low switching = focused content consumption).
+  - Any notifications interacted with.
+
+STEP 4 — Correlate with context:
+  - Day of week: are late nights more common on Fri/Sat?
+  - Does the home arrival time affects sleep time?
+  - What makes user sleep early and what makes user sleep late?
+  - Sleep debt: does the user stay up later after a day with a nap (D7)?
+
+STEP 5 — Correlate with next-day impact (cross-reference with D3):
+  - On late-night days, does the user wake later?
+  - Does the morning routine change (shorter, skip apps)?
+  - Does the user drink coffee or do special action the next afternoon?
+
+STEP 6 — Look for specific late-night-only behaviors:
+  - Apps that are ONLY used after midnight (e.g., a specific game, ASMR content).
+  - Notification types that only appear at night (crypto alerts during Asian off-hours = US market hours).
+
+STEP 7 — In the sample data, user just use dialer app but do not actually call somebody. it seems a clear late-night pattern. Check how it is related to sleep.
+  - does it help user to sleep? or inturrupt sleep?
+  - why user not call, but use dialer? what is the user doing? 
+
+STEP 8 — Assemble output objects. In `context`, always include:
+  - day_of_week, weekend flag
+  - sleep_duration_of_day (the resulting sleep)
+  - next_day_wake_time
+  - whether next day is a workday
+
+STEP 9 — Validate ≥2 occurrences. Assign confidence.
+
+IMPORTANT NOTES:
+- The sample shows the user active until 03:32 with only 6h52m sleep.
+- Late-night call app use (01:05 dialer in sample) are usual and it is not a call — flag these.
+- Distinguish between "intentional late night" (weekend, no obligations) and "unintentional late night" (doom-scrolling on a work night). The latter is more actionable for the assistant (suggest wind-down).
+```
+
+---
+
+## A7. Day-Specific Routine Deviations (Mon–Fri)
+
+```
+PATTERN TASK ID: A7
+PATTERN NAME: Day-Specific Routine Deviations (Monday–Friday)
+TAXONOMY: Temporal Routine Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task identifies behaviors that occur ONLY on a specific weekday or that deviate significantly from the user's general weekday baseline. While A1-A6 capture time-of-day routines averaged across similar days, A7 looks for day-of-week specificity: "Every Monday the user does X," "Every Friday evening the user does Y," "Wednesday is the user's late-work day." These day-specific patterns are highly predictive because they often correspond to real-world schedules (weekly meetings, gym days, social commitments, trash collection day, etc.).
+
+SCOPE BOUNDARY:
+  - This task examines Monday through Friday ONLY (weekends are covered by A9).
+  - It looks across the ENTIRE day for each specific weekday, not just one time window.
+  - It should ONLY report patterns that are specific to a particular day of the week — patterns that occur every weekday equally belong to A1-A6 or A8, not A7.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "Every Monday, user has a calendar event 'Weekly Standup' at 10:00 and opens Zoom/Slack 5 min before."
+2. "Every Wednesday, user leaves work 1 hour later than other weekdays (departs at 19:30 vs. 18:30)."
+3. "Every Friday, user opens a restaurant reservation app around 16:00 and orders food delivery less often that evening."
+4. "Every Tuesday and Thursday, user goes to the gym after work (location change to gym location, fitness app opened)."
+5. "Every Monday morning, user checks BankSalad (weekly finance review) — doesn't do this other mornings."
+6. "Every Friday, user's bedtime is 1.5 hours later than other weekdays."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+ALL data sources are relevant. The key is CROSS-DAY COMPARISON:
+  - [7] Calendar: recurring weekly events are the strongest signal for day-specific routines.
+  - [1] App Usage: compare app usage profiles across days of the week.
+  - [3] Location: compare departure/arrival times and visited locations by day.
+  - [5] Sleep: compare sleep/wake times by day.
+  - [6] Calls: weekly recurring calls (e.g., "call mom every Sunday" — but that's A9; here look for weekday-specific calls).
+  - [0] Notifications: day-specific recurring notifications.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+The trigger is the DAY OF WEEK itself, combined with a time or event:
+  - "It's Monday + 09:50" → user opens Zoom for weekly standup.
+  - "It's Friday + 17:00" → user starts weekend-planning behavior.
+  - "It's Wednesday + work-end" → user goes to gym instead of straight home.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — Group all 28 days of data by day-of-week. You should have ~2 instances of each weekday.
+
+STEP 2 — For each day-of-week, compute a behavioral profile:
+  - Wake time, sleep time, sleep duration.
+  - Home departure time, work arrival time, work departure time, home arrival time.
+  - Top 5 apps by usage time.
+  - Number of location changes.
+  - Number of calls.
+  - Calendar events.
+
+STEP 3 — Compute the WEEKDAY BASELINE: average the profiles across Mon-Fri.
+
+STEP 4 — For each specific day, compare its profile to the baseline:
+  - Is wake time consistently earlier/later on this day?
+  - Is there a location visited on this day that doesn't appear on other days?
+  - Is there an app used on this day that doesn't appear on other days?
+  - Is there a calendar event that recurs weekly on this day?
+  - Is sleep duration consistently different?
+
+STEP 5 — For any deviation found, verify it appears on BOTH instances of that weekday (since we have ~4 weeks of data). If it appears on only 1 of 2 instances, flag as low confidence.
+
+STEP 6 — Also check for MULTI-DAY patterns:
+  - "Tue + Thu" gym pattern.
+  - "Mon + Wed + Fri" specific routine.
+  - These are still day-specific (not every-weekday) and belong here.
+
+STEP 7 — Assemble output objects. The `trigger` should include the day-of-week as a primary context element.
+
+STEP 8 — Validate ≥2 occurrences (which means the pattern must appear on at least 2 instances of the same weekday, i.e., across 4 weeks). Assign confidence.
+
+IMPORTANT NOTES:
+- With only 28 days of data, you have at most 3 instances of each weekday. This limits confidence. Be transparent about this.
+- Public holidays (like 4·19 in the sample) that fall on a weekday should be EXCLUDED from that weekday's profile — they are anomalies, not representative.
+- If a pattern appears on both instances of a weekday, it's likely real even with only 2 data points — especially if supported by calendar recurrence.
+```
+
+---
+
+## A8. Weekday Working Hours Pattern
+
+```
+PATTERN TASK ID: A8
+PATTERN NAME: Weekday Working Hours Pattern (Generic Mon–Fri, Excluding Lunch)
+TAXONOMY: Temporal Routine Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures the user's baseline behavior during standard working hours on weekdays, approximately 09:00–18:00, EXCLUDING the lunch break (covered by A2). This includes work-related app usage patterns, notification handling during work, communication patterns with colleagues, meeting-related behavior, and the overall rhythm of focused work vs. breaks. Understanding the work-hour baseline is essential for: (1) detecting anomalies (A7), (2) knowing when NOT to interrupt the user, (3) predicting break times, and (4) identifying productivity patterns.
+
+SCOPE BOUNDARY:
+  - Covers weekday 09:00–18:00, excluding the lunch window (A2, ~12:00–13:30).
+  - Does NOT cover day-specific deviations (A7) — A8 is the GENERIC weekday baseline.
+  - Does NOT cover afternoon-specific micro-routines (A3) in detail — A8 provides the overall work-hour picture, while A3 zooms into afternoon specifics.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "During work hours, user's dominant apps are Slack, Chrome, and Gmail — these account for 80% of foreground time."
+2. "User checks KakaoTalk every 20-30 min during work hours but spends <1 min each time (quick message check)."
+3. "User takes a micro-break every 90-120 min: opens Instagram or news app for 3-5 min, then returns to work apps."
+4. "Notifications from work apps (Slack, email) are clicked within 30 seconds; notifications from social apps are dismissed or ignored until lunch/evening."
+5. "User's phone is mostly idle during 10:00-12:00 (likely using a computer for work) — only background services and occasional notification checks."
+6. "Before and after calendar meetings, user opens a note-taking app for 2-3 min (meeting prep/notes)."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [1] App Usage: all events during work hours. Classify apps as "work" vs. "personal" based on usage context.
+  - [0] Notifications: which notifications are acted on during work hours vs. dismissed.
+  - [7] Calendar: meeting schedule — how does it affect app usage?
+
+SECONDARY:
+  - [3] Location: confirm user is at workplace. If WFH, confirm home location.
+  - [2] Network: workplace Wifi connection.
+  - [6] Calls: work-related calls.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+Work-hour patterns are primarily TIME-TRIGGERED:
+  - Work starts: arrival at workplace (location) or first work-app open after morning routine.
+  - Work ends: departure from workplace or last work-app close before commute.
+
+Within work hours, micro-patterns may be triggered by:
+  - Calendar event start/end (meeting → post-meeting behavior).
+  - Notification arrival (work notification → immediate action; personal notification → deferred).
+  - Duration of focused work (after 90 min of no personal app → break).
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — For each weekday, extract all events from 09:00–12:00 and 13:30–18:00 (excluding lunch).
+
+STEP 2 — Identify the user's "work app" set:
+  - Apps that are used predominantly during 09:00–18:00 on weekdays and rarely at other times.
+  - Apps that are used in response to work-related notifications.
+  - If the user primarily works on a computer (phone is idle during work), note this — low phone activity during work hours IS a pattern.
+
+STEP 3 — Compute work-hour phone usage metrics:
+  - Total screen time during work hours.
+  - Number of phone pickups (KEYGUARD_HIDDEN events).
+  - Average session length.
+  - Ratio of work apps to personal apps.
+
+STEP 4 — Identify break patterns:
+  - Find clusters of personal-app usage (Instagram, YouTube, news) during work hours.
+  - Are breaks at consistent times? Consistent durations?
+  - What triggers a break? (Time-based? Post-meeting? Post-notification?)
+
+STEP 5 — Analyze notification handling:
+  - For each notification category (messaging, social, finance, news), compute:
+    - Average response time during work hours.
+    - Click rate vs. dismiss rate.
+  - Compare with evening/weekend response patterns — the difference reveals work-hour notification priority.
+
+STEP 6 — Analyze meeting-related behavior:
+  - Before a calendar event: does the user open any prep app?
+  - After a calendar event ends: what's the first app opened?
+  - During a meeting (between event start and end): is the phone idle or does the user multitask?
+
+STEP 7 — Look for "phone-idle" periods:
+  - Gaps of 30+ min with no app activity during work hours suggest the user is working on a computer.
+  - Are these gaps consistent in timing and duration?
+
+STEP 8 — Assemble output objects. Focus on patterns that are PREDICTIVE:
+  - "At 10:00 on weekdays, user is likely in a focused work session — do not interrupt."
+  - "At 15:00, user is likely to take a break — good time to surface a notification."
+  - "After a meeting ends, user will check KakaoTalk within 2 min."
+
+STEP 9 — Validate ≥2 occurrences across weekdays. Assign confidence.
+
+IMPORTANT NOTES:
+- If the user's phone shows very little activity during work hours, that itself is a pattern worth reporting. It means the user works on a computer and the phone is secondary.
+- The sample data shows a public holiday (4·19) — exclude this day from the weekday work-hour baseline.
+- Distinguish between WFH days (home Wifi during work hours) and office days (workplace Wifi/location) if both exist in the data.
+```
+
+---
+
+## A9. Weekend Daytime Pattern
+
+```
+PATTERN TASK ID: A9
+PATTERN NAME: Weekend Daytime Pattern (Saturday & Sunday)
+TAXONOMY: Temporal Routine Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures the user's recurring behavior during weekend daytime hours (roughly 08:00–18:00 on Saturdays and Sundays). Weekend behavior typically differs dramatically from weekdays: later wake times, no commute, different app usage (more leisure, shopping, social), different locations (errands, social outings, exercise), and different communication patterns. Identifying weekend-specific routines enables the assistant to switch its suggestions from work-oriented to leisure-oriented, recommend activities, and predict errand timing.
+
+SCOPE BOUNDARY:
+  - Covers Saturday and Sunday daytime, from wake-up to ~18:00.
+  - Morning wake-up overlaps with A1 but A9 captures the WEEKEND-SPECIFIC version.
+  - Evening/night weekend behavior is covered by A5/A6 with weekend context.
+  - Public holidays that fall on weekdays should be checked — they may follow weekend patterns.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "On weekends, user wakes 1.5-2 hours later than weekdays and spends 30+ min in bed browsing phone (YouTube, Instagram)."
+2. "Saturday mornings: user does laundry (inferred from no phone activity 10:00-10:30, then opens music app FLO — music while doing chores)."
+3. "Sunday mornings: user goes to a café (location change to café area, opens a reading/news app for 1-2 hours)."
+4. "Weekend afternoons: user goes shopping (location changes to mall/shopping district, opens payment apps)."
+5. "User exercises on Saturday mornings (fitness app opened, location change to gym/park)."
+6. "User calls parents on Sunday afternoon (~15:00) — this is the only consistent weekly call pattern."
+7. "On weekends, user browses real-estate apps (Hogangnono) more extensively than weekdays (longer sessions, more searches)."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+ALL sources are relevant, with emphasis on:
+  - [1] App Usage: compare weekend app mix with weekday. Which apps are weekend-dominant?
+  - [3] Location: weekend location variety (more diverse than weekday home↔work).
+  - [5] Sleep: weekend wake time vs. weekday.
+  - [6] Calls: weekend-specific calls (family, friends).
+  - [7] Calendar: weekend events (social, personal).
+  - [4] Movement: weekend exercise or travel.
+  - [0] Notifications: weekend notification interaction patterns.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. DAY: Saturday or Sunday (primary trigger).
+  2. WAKE-UP on weekend: later wake time triggers a different morning sequence.
+  3. NO WORK OBLIGATION: absence of work calendar events enables leisure behavior.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — Identify all Saturday and Sunday days in the 4 weeks window. Also identify public holidays on weekdays (like 4·19 in the sample) that may exhibit weekend-like behavior.
+
+STEP 2 — For each weekend day, extract all events from wake-up to 18:00.
+
+STEP 3 — Compare with weekday baseline (from A8):
+  - Wake time difference.
+  - App usage mix difference (compute % of time in each app category: social, media, finance, shopping, productivity, communication).
+  - Location pattern difference (number of unique locations, types of locations).
+  - Communication pattern difference.
+
+STEP 4 — Look for Saturday-specific vs. Sunday-specific patterns:
+  - Some users have different Saturday and Sunday routines (e.g., Saturday = errands/exercise, Sunday = rest/family).
+  - Compare the two Saturdays and two Sundays in the data.
+
+STEP 5 — Identify weekend-only activities:
+  - Apps opened only on weekends.
+  - Locations visited only on weekends.
+  - Calls made only on weekends.
+
+STEP 6 — Look for weekend morning rituals:
+  - Extended bed-browsing session (long app usage at home location before any location change).
+  - Brunch/late breakfast pattern (food app or location change to restaurant later than weekday lunch).
+  - Chore indicators (music app + home location + no other app = doing housework).
+
+STEP 7 — Look for weekend afternoon patterns:
+  - Outing patterns (consistent departure time, consistent destination type).
+  - Social patterns (group chat activity → meetup → location change).
+
+STEP 8 — Assemble output objects. Separate Saturday and Sunday patterns if they differ. Include `weekend: true` in context.
+
+STEP 9 — Validate ≥2 occurrences. With 28 days, you have ~3 Saturdays and ~3 Sundays. If both Saturdays show the same pattern, report with medium-high confidence.
+
+IMPORTANT NOTES:
+- The sample data is from a Saturday (April 19, 2025 is a Saturday AND a public holiday 4·19혁명기념일). This means the user's behavior on this day reflects both weekend and holiday patterns.
+- Weekend patterns are valuable for the assistant to switch modes: "It's Saturday morning — instead of showing commute info, suggest brunch spots or weekend activities."
+- Look for the "Sunday scaries" pattern: does the user start checking work apps or preparing for Monday on Sunday evening?
+```
+
+---
+
+## B1. Home-Specific Behavior Pattern
+
+```
+PATTERN TASK ID: B1
+PATTERN NAME: Home-Specific Behavior Pattern
+TAXONOMY: Location-Anchored Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures behaviors that are specifically anchored to the user's home location. 
+While temporal patterns (A1-A9) are organized by time-of-day, B1 focuses on what the user does BECAUSE they are at home, regardless of time. 
+This includes home-specific app usage (smart home controls, streaming on home Wifi, home delivery), home-specific notification handling, and behavioral differences between "at home" and "away from home" contexts. 
+The home location is identified as the location where sleep occurs and where the user spends the most nighttime hours.
+
+SCOPE BOUNDARY:
+  - Covers ALL time periods when the user is at the home location.
+  - Must NOT duplicate time-specific patterns — focuses on behaviors that are LOCATION-TRIGGERED (happen because the user is at home).
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "Whenever user arrives home (any time), they connect to home Wifi and within 5 min open a streaming app (YouTube/Netflix) — this doesn't happen at other locations."
+2. "User only uses food delivery apps (Baemin) when at home — never orders delivery from workplace or other locations."
+3. "Smart home app (SmartThings) is only opened at home location."
+4. "User's notification click-through rate is higher at home than at work — they engage with more notifications when relaxed at home."
+5. "Music app (FLO) is used as background audio primarily at home — detected by FLO FOREGROUND_SERVICE_START concurrent with home Wifi."
+6. "User browses real-estate app (Hogangnono) and finance apps primarily from home."
+7. "Upon arriving home, user always checks KakaoTalk messages that accumulated during commute."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [3] Location: identify home location (location_label where sleep occurs; in sample, likely "Location 36" based on coordinates near 강남/서초 area).
+  - [1] App Usage: all app events while at home location.
+  - [2] Network: home Wifi SSID/IP as a proxy for home presence.
+
+SECONDARY:
+  - [0] Notifications: notification handling patterns at home vs. away.
+  - [5] Sleep: confirms home location.
+  - All other sources for context.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. ARRIVAL HOME: location change to home coordinates + Wifi connection. This is the primary trigger for home-arrival behaviors.
+  2. BEING AT HOME: continuous presence at home location (for ongoing home behaviors).
+  3. HOME WIFI CONNECTION: network event showing connection to home Wifi.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════ 
+STEP 1 — For each day, segment time into "at home" and "away from home" periods using location and Wifi data.
+  - user doesn't have wifi at home. so if connected to wifi, that is not home.
+  - home is location 10 and 42. all other places signal away from home.
+
+STEP 2 — For each "at home" period, catalog all app usage, notification interactions, calls, and connectivity events.
+
+STEP 3 — Compare "at home" behavior with "away from home" behavior:
+  - Which apps are used EXCLUSIVELY or PREDOMINANTLY at home?
+  - Which notification types get clicked at home but dismissed away?
+  - Are there apps used away but never at home (work apps)?
+
+STEP 4 — Identify HOME ARRIVAL sequences:
+  - What does the user do in the first 10 minutes after arriving home? Is this consistent across multiple arrivals?
+  - Does the arrival time (evening vs. afternoon vs. late night) change the sequence?
+
+STEP 5 — Identify HOME-SPECIFIC periodic behaviors:
+  - Does the user check a specific app at regular intervals while at home (e.g., check crypto every hour)?
+  - Does the user have a "settling in" routine (change clothes = phone idle for 5 min, then specific app)?
+
+STEP 6 — Look for HOME + TIME combinations that are more specific than either alone:
+  - "At home + morning" = specific routine (already in A1, but note the home-anchoring).
+  - "At home + weekend afternoon" = specific leisure pattern.
+  - Report these only if the HOME LOCATION is a necessary condition (i.e., the behavior doesn't happen at the same time when the user is elsewhere).
+
+STEP 7 — Assemble output objects. In `trigger`, emphasize the location/Wifi connection as the trigger, not the time.
+
+STEP 8 — Validate ≥2 occurrences. Assign confidence.
+
+IMPORTANT NOTES:
+- The sample data shows the user at home (Location 36, Wifi 160.101.61.2) from at least 00:47 through 10:40+. The home location coordinates (37.4987, 127.0307) are in the Seocho/Gangnam area of Seoul.
+- The Hogangnono notification about "이수푸르지오더프레티움" (a specific apartment complex) suggests the user is interested in real estate near their home — this is a home-context behavior.
+- The 삼성카드 APT관리비 (apartment management fee) notification confirms the user lives in an apartment.
+- Distinguish between "home because it's nighttime" (everyone is home at night) and "home during unusual hours" (WFH day, sick day, holiday) — the latter reveals more about home-specific behavior.
+```
+
+---
+
+## B2. Workplace-Specific Behavior Pattern
+
+```
+PATTERN TASK ID: B2
+PATTERN NAME: Workplace-Specific Behavior Pattern
+TAXONOMY: Location-Anchored Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures behaviors anchored to the user's workplace location. 
+Similar to B1 (home), B2 focuses on what the user does BECAUSE they are at the workplace, not because of the time of day. 
+This includes work-specific app usage, workplace-specific notification handling, workplace-specific communication patterns, and behaviors triggered by arriving at or departing from the workplace. 
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "Upon arriving at workplace, user connects to office Wifi and opens Slack within 2 min — this is the first app opened at work, regardless of arrival time."
+2. "User only uses a specific productivity app (Notion, Jira) at the workplace — never at home."
+3. "At workplace, user dismisses all social media notifications without clicking — at home, they click them."
+4. "User's phone screen time is 60% lower at workplace than at home (works on computer)."
+5. "User opens a coffee ordering app (Starbucks) within 15 min of arriving at workplace on 80% of workdays."
+6. "User makes more phone calls at workplace than at home (work-related calls)."
+7. "When staying late at office (past 19:00), user orders food delivery to workplace."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [3] Location: any event related location 1(workplace).
+  - [1] App Usage: all app events while at workplace.
+  - [2] Network: workplace Wifi/Cellular switch related action.
+
+SECONDARY:
+  - [0] Notifications: notification handling at workplace vs. elsewhere.
+  - [7] Calendar: work meetings confirm workplace context.
+  - [6] Calls: work-hour calls at workplace.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. ARRIVAL AT WORKPLACE: location change to workplace + Wifi connection.
+  2. BEING AT WORKPLACE: continuous presence.
+  3. DEPARTURE FROM WORKPLACE: location change away from workplace.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — Identify the workplace location:
+  - Find the location_label with the most weekday daytime (09:00-18:00) presence that is NOT the home location.
+  - Cross-reference with Wifi connections during work hours.
+  - If the user works from home (same location as home during work hours), note this — B2 may have limited data, and WFH-specific patterns should be flagged.
+
+STEP 2 — For each weekday, segment time into "at workplace" and "not at workplace" periods.
+
+STEP 3 — Catalog all events during "at workplace" periods.
+
+STEP 4 — Compare workplace behavior with home behavior:
+  - App usage differences (work apps vs. personal apps).
+  - Notification response time differences.
+  - Call frequency and duration differences.
+  - Screen time differences.
+
+STEP 5 — Identify WORKPLACE ARRIVAL sequences:
+  - First 10 minutes after arriving at workplace — consistent app opens?
+  - Does the user buy coffee upon arrival?
+
+STEP 6 — Identify WORKPLACE DEPARTURE sequences:
+  - Last 10 minutes before leaving workplace — any wind-down behavior?
+  - Does the user check maps/transit app before departing?
+
+STEP 7 — Identify workplace-specific periodic behaviors:
+  - Regular break patterns (already in A8, but here focus on location-specific aspects).
+  - Meeting-related behaviors (already in H1/H2, but here focus on workplace-specific meeting prep).
+
+STEP 8 — Assemble output objects with workplace location_id in context.
+
+STEP 9 — Validate ≥2 occurrences. Assign confidence.
+
+IMPORTANT NOTES:
+- The sample data is from a Saturday/holiday, so workplace data may not be present. The extraction procedure should still be defined for when weekday data is available.
+- If the user is a remote worker (no consistent workplace location), report this finding and look for "virtual workplace" patterns (e.g., specific Wifi network at a co-working space, or specific app usage patterns during work hours at home).
+- Some users have multiple workplace locations (e.g., main office + client site). If detected, report patterns for each.
+```
+
+---
+
+## B3. Frequent Third-Place Behavior
+
+```
+PATTERN TASK ID: B3
+PATTERN NAME: Frequent Third-Place Behavior (Café, Gym, Store, etc.)
+TAXONOMY: Location-Anchored Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task identifies locations that the user visits repeatedly (but are neither home nor workplace) and captures the behavior patterns associated with each. 
+"Third places" include cafés, gyms, grocery stores, restaurants, parks, friends' homes, religious venues, hobby locations, etc. 
+Each third place may have its own behavioral signature: Identifying these location-behavior associations enables the assistant to proactively surface relevant information when the user approaches or arrives at a third place.
+
+SCOPE BOUNDARY:
+  - Covers any location visited ≥3 times in the 4 weeks window that is NOT home (locaation 10, 42) or workplace (location 1).
+  - Focuses on LOCATION-ANCHORED behavior, not time-anchored (though time context is recorded).
+  - Must NOT overlap with C2 (non-commute recurring trips) — C2 covers the JOURNEY to these places; B3 covers the BEHAVIOR at these places.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "User visits Location 12 (café) every Saturday morning. Upon arrival, opens a reading app and stays for 1.5-2 hours."
+2. "User visits Location 8 (gym) on Tue/Thu evenings. Opens fitness tracking app upon arrival, session lasts 60-90 min."
+3. "User visits Location 15 (grocery store) every Sunday afternoon. Opens a shopping list app before entering."
+4. "User visits Location 22 (friend's home) on Friday evenings. KakaoTalk messaging increases before and during the visit."
+5. "At Location 5 (restaurant area), user always opens a review app (Naver Map or Mango Plate) before choosing a restaurant."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [3] Location: identify all unique locations visited ≥3 times. Compute visit frequency, typical day/time, and duration.
+  - [1] App Usage: all app events during each third-place visit.
+
+SECONDARY:
+  - [0] Notifications: notifications interacted with at third places.
+  - [2] Network: Wifi connections at third places (some cafés/gyms have Wifi).
+  - [4] Movement: how the user gets to third places (walking, driving).
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. ARRIVAL at third place: location change to the third-place coordinates.
+  2. PROXIMITY to third place: if the user is moving toward a known third place (predictable from trajectory).
+  3. TIME + DAY: if the user always visits a third place at the same time on the same day, the time+day combination is also a trigger.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — Build a location frequency table:
+  - For each location_label in the data, count: number of visits, total time spent, typical day-of-week, typical time-of-day.
+  - Exclude home and workplace.
+  - Rank by visit frequency. Locations with ≥3 visits are "third places."
+
+STEP 2 — For each third place, extract all events during each visit:
+  - Define visit start: first location record at that location_label.
+  - Define visit end: first location record at a different location_label, or Wifi disconnect if applicable.
+
+STEP 3 — For each third place, characterize the visit:
+  - What apps are used during the visit?
+  - What apps are used ONLY at this location (not at home or work)?
+  - How long is the typical visit?
+  - What day/time does the visit typically occur?
+  - What does the user do immediately before departing to this location (pre-visit behavior)?
+  - What does the user do immediately after leaving this location (post-visit behavior)?
+
+STEP 4 — Try to infer the TYPE of third place:
+  - Gym: music/youtube app used, visit duration 60-90 min, evening or morning.
+  - Café: long session with reading/browsing app, Wifi connection, many hours.
+  - Store: short visit (15-30 min), payment notification during visit.
+  - Restaurant: food-related app, payment notification, 30-60 min.
+  - Friend's home: messaging activity, evening/weekend, 2+ hours.
+  - Use app usage and visit characteristics to infer — do NOT guess without evidence.
+
+STEP 5 — For each third place, look for PRE-VISIT preparation:
+  - Does the user open Maps before going?
+  - Does the user message someone before going (coordination)?
+  - Does the user open a specific app (shopping list, fitness plan)?
+
+STEP 6 — Assemble output objects. Each third place should be a separate pattern with its own location_id, visit characteristics, and associated behaviors.
+
+STEP 7 — Validate ≥2 visits. Assign confidence based on consistency of behavior across visits.
+
+IMPORTANT NOTES:
+- With 28 days of data, third-place visits may be sparse. Even 3 visits to the same location with similar behavior is worth reporting.
+- The sample data shows the user opening Naver Map at 10:26 from home — this could be preparation for visiting a third place. Look for what happens after the map check.
+- Location labels are anonymized ("Location 36"). Use coordinates, visit timing, and associated app usage to infer location type.
+```
+
+---
+
+## B4. Novel / Infrequent Location Behavior
+
+```
+PATTERN TASK ID: B4
+PATTERN NAME: Novel / Infrequent Location Behavior
+TAXONOMY: Location-Anchored Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures the user's behavior when visiting a location for the first time or very rarely (only once in the 4 weeks window). 
+Novel locations trigger different behaviors than familiar ones: the user may rely more heavily on maps, search for reviews, take photos, share location with contacts, or exhibit exploratory browsing. 
+Understanding how the user behaves at unfamiliar locations helps the assistant provide better support during travel, new experiences, or one-off errands.
+
+SCOPE BOUNDARY:
+  - Covers locations visited exactly ONCE in the 4 weeks window (or locations with no prior visit history).
+  - Must NOT overlap with B3 (frequent third places, which requires ≥2 visits).
+  - Focuses on the BEHAVIORAL DIFFERENCE between novel and familiar location visits.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "When visiting a new location, user opens Naver Map 2-3 times (vs. 0 times at familiar locations) — checking directions repeatedly."
+2. "At novel locations, user opens a review/search app (Naver, Google) within 5 min of arrival — looking up information about the place."
+3. "User takes photos at novel locations (camera app opened) but rarely at familiar locations."
+4. "User shares location via KakaoTalk when at novel locations (sending location to a contact)."
+5. "At novel locations, user's phone usage is lower (exploring the physical environment) or higher (anxiously checking maps/info)."
+6. "After visiting a novel restaurant, user opens a review app to leave a rating."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [3] Location: identify locations visited only once.
+  - [1] App Usage: app behavior at novel locations vs. familiar locations.
+  - [0] Notifications: location-sharing or check-in notifications.
+
+SECONDARY:
+  - [4] Movement: how the user traveled to the novel location (longer journey? unfamiliar route?).
+  - [7] Calendar: was the novel location visit planned (calendar event)?
+  - [2] Network: no familiar Wifi = novel location signal.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. ARRIVAL at a location not previously seen in the data.
+  2. LONG DISTANCE TRAVEL: arriving at a location far from the user's usual home/work/third-place cluster.
+  3. CALENDAR EVENT at an unfamiliar location.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — Identify location_labels in the data. Classify each as:
+  - Home (Location 10,42), Workplace (Location 1), Frequent third place (≥3 visits), or Novel (1 visit).
+
+STEP 2 — For each novel location visit, extract all events during the visit.
+
+STEP 3 — Compare behavior at novel locations with behavior at familiar locations:
+  - Map app usage frequency.
+  - Search/review app usage.
+  - Camera app usage.
+  - Messaging activity (sharing location, asking for recommendations).
+  - Visit duration.
+  - Phone pickup frequency.
+  - what does the user do?
+
+STEP 4 — Look for PRE-VISIT preparation for novel locations:
+  - Did the user search for the location beforehand (map app, search app)?
+  - Did the user receive a calendar invite or message with an address?
+  - How far in advance did preparation start?
+
+STEP 5 — Look for POST-VISIT behavior:
+  - What does user do on the way home/workplace after visit?
+  - Do the user compensate for visiting special place?
+  - Did the user share photos or experiences via social media?
+
+STEP 6 — Assemble output objects. Since novel locations are by definition one-off, the "pattern" here is the user's GENERAL behavior at novel locations (a meta-pattern across multiple novel location visits), not a pattern at a specific location.
+
+STEP 7 — Validate: you need ≥2 novel location visits showing similar behavior to establish a pattern. Assign confidence.
+
+IMPORTANT NOTES:
+- The key insight is not about a specific location but about the user's GENERAL approach to unfamiliar places.
+- If the user rarely visits novel locations (homebody), that itself is a pattern worth noting.
+```
+
+---
+
+## C1. Commute Departure Routine (Home → Work)
+
+```
+PATTERN TASK ID: C1
+PATTERN NAME: Commute Departure Routine (Home → Work)
+TAXONOMY: Mobility & Commute Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures the user's recurring behavior pattern during the morning commute from home to workplace. 
+The commute is a highly predictable, time-constrained window where users develop strong habits: specific media consumption (podcasts, music, news), 
+communication patterns (catching up on messages), transit-related app usage (maps, transit apps), and consistent timing. 
+Understanding the commute enables the assistant to provide real-time transit updates, queue up preferred commute media, and predict arrival time at work.
+
+SCOPE BOUNDARY:
+  - Starts when the user DEPARTS HOME (location change from home, Wifi disconnect from home network, or movement detection).
+  - Ends when the user ARRIVES AT WORKPLACE (location change to workplace, Wifi connect to work network).
+  - This is the HOME→WORK direction only. WORK→HOME is C2.
+  - Must NOT overlap with A1 (morning routine, which ends at home departure) — C1 starts exactly where A1 ends.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "User departs home at 08:15 ± 10 min on weekdays. Commute takes 35-45 min."
+2. "During commute, user listens to FLO music (FOREGROUND_SERVICE_START) and browses Instagram."
+3. "User opens Naver Map at home before departing, then doesn't reopen it during commute (familiar route)."
+4. "User reads news app during commute (suggesting public transit, not driving)."
+5. "User connects Bluetooth earbuds at home departure time, disconnects at workplace arrival."
+6. "User checks and responds to KakaoTalk messages accumulated overnight during the commute."
+7. "Commute duration is consistent (40 ± 5 min) on normal days but varies on specific days (e.g., Monday = longer commute due to traffic)."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [3] Location: home departure and workplace arrival timestamps and coordinates.
+  - [1] App Usage: all app events during commute window.
+  - [2] Network: home Wifi disconnect → Cellular → workplace Wifi connect sequence.
+  - [4] Movement: walking, in_vehicle detection during commute.
+
+SECONDARY:
+  - [0] Notifications: notifications interacted with during commute.
+  - [5] Sleep: wake time (affects departure time).
+  - [7] Calendar: early meetings that might cause earlier departure.
+  - [6] Calls: calls during commute.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. HOME DEPARTURE: location change from home + home Wifi disconnect. This is the primary trigger.
+  2. TIME: consistent departure time on weekdays.
+  3. MOVEMENT START: transition from stationary to walking/in_vehicle at home location.
+
+END BOUNDARY:
+  - WORKPLACE ARRIVAL: location change to workplace + workplace Wifi connect.
+  - Or: first work-app open after a period of transit-mode app usage.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — For each weekday, identify the commute window:
+  - Start: first location change from home OR home Wifi disconnect in the morning.
+  - End: first location record at workplace OR workplace Wifi connect.
+  - Compute commute duration.
+
+STEP 2 — For each commute, extract all events:
+  - App usage (what apps are open during transit).
+  - Notifications received and interacted with.
+  - Network changes (Wifi → Cellular → Wifi).
+  - Movement type (walking, in_vehicle, transit).
+  - Bluetooth connections (earbuds, car).
+
+STEP 3 — Characterize the commute:
+  - Mode of transport: infer from movement data and app usage.
+    - Public transit: walking + in_vehicle alternation, transit app used, long media consumption (reading/watching possible).
+    - Driving: in_vehicle only, no media consumption (or audio only), maps app active.
+    - Walking/cycling: walking movement, shorter distance, fitness app possible.
+  - Duration consistency: compute mean and standard deviation across weekdays.
+  - Departure time consistency: compute mean and standard deviation.
+
+STEP 4 — Extract commute media pattern:
+  - Does the user listen to music (FLO, Spotify)?
+  - Does the user watch videos (YouTube, Netflix)?
+  - Does the user read (news app, webtoon)?
+  - Does the user listen to podcasts?
+  - Is the media choice consistent across commutes?
+
+STEP 5 — Extract commute communication pattern:
+  - Does the user catch up on messages during commute?
+  - Does the user make calls during commute?
+
+STEP 6 — Look for CONDITIONAL variations:
+  - Does a late wake-up → later departure → different commute behavior (rushed, no media)?
+  - Does an early calendar meeting → earlier departure?
+  - Does weather affect commute (if weather data available)?
+  - Does day-of-week affect commute duration (Monday traffic)?
+
+STEP 7 — Assemble output objects. The `trigger` is home departure. The `prediction` sequence should include:
+  - Commute media choice.
+  - Expected commute duration.
+  - Expected arrival time.
+  - First action upon arrival at work.
+
+STEP 8 — Validate ≥2 weekday commutes. Assign confidence.
+
+IMPORTANT NOTES:
+- The sample data is from a Saturday/holiday, so commute data may not be present. Define the procedure for weekday data.
+- If the user works from home (no commute detected on some weekdays), note which days have commutes and which don't.
+- The Naver Map usage at 10:26 in the sample could be commute-related on a non-work day (going somewhere), but it's not a home→work commute.
+- Bluetooth earbuds connection at commute start is a strong signal — look for it in I2 as well, but here focus on the commute context.
+```
+
+---
+
+## C2. Commute Arrival Routine (Work → Home) & Non-Commute Recurring Trips
+
+```
+PATTERN TASK ID: C2a
+PATTERN NAME: Commute Arrival Routine (Work → Home)
+TAXONOMY: Mobility & Commute Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures the user's recurring behavior during the evening commute from workplace to home. The return commute often has a different character than the morning commute: the user may be more relaxed, consume different media (entertainment vs. news), make personal calls (family), stop at intermediate locations (grocery store, gym), and exhibit "decompression" behaviors. Understanding the return commute helps the assistant predict arrival time at home, suggest dinner options, and prepare home automations.
+
+SCOPE BOUNDARY:
+  - Starts when the user DEPARTS WORKPLACE.
+  - Ends when the user ARRIVES HOME (or at an intermediate stop that precedes home arrival).
+  - This is the WORK→HOME direction only. HOME→WORK is C1.
+  - Must NOT overlap with A4 (dinner routine, which starts after home arrival) — C2a ends where A4 begins.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "User departs workplace at 18:30 ± 15 min on weekdays. Return commute takes 40-50 min (slightly longer than morning due to traffic)."
+2. "During return commute, user watches YouTube (vs. music-only on morning commute) — suggesting public transit with a seat."
+3. "User calls parent ('아빠') during return commute 3 out of 5 weekdays."
+4. "On Tue/Thu, user stops at gym (Location 8) between work and home, arriving home 1.5 hours later than other days."
+5. "User opens food delivery app during the last 10 min of commute (pre-ordering dinner for home arrival)."
+6. "User checks KakaoTalk group chat ('friends' group) during return commute more than morning commute."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES & EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+Follow the same structure as C1 but in reverse direction (workplace → home). Key differences to look for:
+
+STEP 1 — Identify workplace departure time for each weekday.
+STEP 2 — Check for INTERMEDIATE STOPS between work and home:
+  - Location changes to a third place before arriving home.
+  - Which days have intermediate stops? Is it consistent (e.g., always Tue/Thu)?
+STEP 3 — Compare return commute behavior with morning commute:
+  - Different media? Different apps? Different communication?
+  - Different duration? (Traffic patterns differ AM vs. PM)
+STEP 4 — Look for "pre-arrival" behaviors:
+  - Does the user order food, adjust smart home settings, or message household members in the last 10 min before arriving home?
+STEP 5 — Assemble output objects with workplace departure as trigger.
+STEP 6 — Validate ≥2 occurrences. Assign confidence.
+
+═══════════════════════════════════════════════════════════════════════════
+
+PATTERN TASK ID: C2b
+PATTERN NAME: Non-Commute Recurring Trips
+TAXONOMY: Mobility & Commute Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures recurring trips that are NOT the daily home↔work commute. These include weekly grocery runs, gym visits, weekend outings to specific areas, visits to family/friends, and regular errands. Non-commute recurring trips are valuable for predicting the user's schedule and proactively providing relevant information (shopping lists, traffic to destination, opening hours).
+
+SCOPE BOUNDARY:
+  - Covers any recurring trip (≥2 occurrences) that is NOT home→work or work→home.
+  - The JOURNEY is the focus (departure time, route, duration, in-transit behavior), not the behavior at the destination (which is B3).
+  - Includes weekend trips, evening trips, and any non-commute weekday trips.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "Every Sunday ~14:00, user travels from home to Location 20 (parents' home, 45 min drive). Opens Naver Map before departure, listens to FLO during drive."
+2. "Every Saturday morning, user walks to Location 12 (café, 10 min walk). No map app needed (familiar route)."
+3. "Twice a week (Tue/Thu), user travels from work to Location 8 (gym) at ~18:30."
+4. "Every other Sunday, user drives to a large grocery store (Location 18, 20 min drive)."
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — From the location data, extract all trips (location A → location B transitions).
+STEP 2 — Exclude home→work and work→home commutes (already covered by C1 and C2a).
+STEP 3 — Group remaining trips by destination. For each destination visited ≥2 times:
+  - What is the typical departure location? (Home? Work? Another third place?)
+  - What is the typical departure time and day?
+  - What is the typical trip duration?
+  - What apps are used during the trip?
+  - What preparation happens before departure (map check, message coordination)?
+STEP 4 — Look for trip CHAINS: does the user visit multiple locations in sequence (e.g., gym → grocery store → home)?
+STEP 5 — Assemble output objects for each recurring trip pattern.
+STEP 6 — Validate ≥2 occurrences. Assign confidence.
+
+IMPORTANT NOTES:
+- The sample shows Naver Map opened at 10:26 on a Saturday — this could be preparation for a non-commute trip. Track what location change follows.
+- The message from "아빠" about cherry blossom season and campsite management suggests the father may run a campsite/pension — weekend visits to the father's location could be a recurring trip.
+```
+
+---
+
+## C3. Long-Distance / Unusual Movement Pattern
+
+```
+PATTERN TASK ID: C3
+PATTERN NAME: Long-Distance / Unusual Movement Pattern
+TAXONOMY: Mobility & Commute Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task detects movements that are significantly longer or to significantly different locations than the user's normal daily patterns. Long-distance travel (inter-city, airport visits, train stations), unusual routes, and first-time destinations all fall here. These events are important because they represent breaks from routine where the user needs the most assistance (navigation, accommodation, schedule management) and where normal predictions don't apply.
+
+SCOPE BOUNDARY:
+  - Covers any single trip where distance_moved is significantly larger than the user's typical daily movement, OR the destination is far from the user's home/work cluster.
+  - Must NOT overlap with C1/C2a (daily commute) or C2b (recurring non-commute trips) — C3 is for UNUSUAL, non-recurring movements.
+  - One-off trips that happen only once in 28 days belong here.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "User traveled 150km to a different city on a weekend — opened hotel booking app, camera app, and restaurant search app at destination."
+2. "User went to the airport (detected by location near airport coordinates) — opened airline app, checked in online."
+3. "User took a train (KTX app opened, location moved rapidly between cities)."
+4. "On long-distance travel days, user's phone battery drains faster (more map usage, photos) — relevant for I4."
+5. "Before long-distance trips, user packs (phone idle for 30+ min at home), then opens transit/booking app."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [3] Location: large distance_moved values, coordinates far from home/work cluster.
+  - [4] Movement: extended in_vehicle periods, high-speed movement (train/car on highway).
+  - [1] App Usage: travel-related apps (maps, booking, airline, hotel).
+
+SECONDARY:
+  - [7] Calendar: travel-related calendar events.
+  - [2] Network: roaming, unfamiliar Wifi networks.
+  - [0] Notifications: booking confirmations, flight updates.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — Compute the user's "normal movement radius": the maximum distance from home that the user typically travels on a regular day (home↔work distance, third-place distances).
+
+STEP 2 — Scan all location records for any movement exceeding 2x the normal radius, or any location coordinates outside the user's usual geographic cluster.
+
+STEP 3 — For each unusual movement detected:
+  - Extract all events from 2 hours before departure to 2 hours after arrival.
+  - Characterize: destination distance, travel duration, mode of transport, apps used.
+  - Look for pre-trip preparation (booking, packing, coordination messages).
+  - Look for at-destination behavior (exploration, photos, reviews).
+  - Look for return-trip behavior.
+
+STEP 4 — Even if long-distance trips are one-off, look for META-PATTERNS:
+  - Does the user always prepare the same way before any long trip?
+  - Does the user always use the same navigation app for unfamiliar routes?
+  - Does the user always share location with someone during long trips?
+
+STEP 5 — Assemble output objects. Since these are often one-off events, the "pattern" may be a meta-pattern about how the user handles unusual travel in general.
+
+STEP 6 — Validate: for a specific trip pattern, need ≥2 occurrences. For meta-patterns about travel behavior, need ≥2 different long-distance trips showing similar preparation/behavior.
+
+IMPORTANT NOTES:
+- With 28 days of data, there may be 1-3 long-distance trips. If none, report that finding.
+- The sample data shows only Location 36 with a small distance_moved (122m) — no long-distance travel in this snippet. The full 4 weeks dataset may contain more.
+- Even if no long-distance pattern is found, document the user's normal movement radius as a baseline for anomaly detection.
+```
+
+---
+
+## D1. Pre-Sleep Routine Chain
+
+```
+PATTERN TASK ID: D1
+PATTERN NAME: Pre-Sleep Routine Chain (Last App → Screen Off → Sleep Start)
+TAXONOMY: Sleep & Health Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures the user's final sequence of actions before falling asleep: the last few apps used, the order in which they're used, the final screen-off event, and the gap between screen-off and actual sleep onset. The pre-sleep routine is one of the most consistent and personal patterns — users often have a ritualistic wind-down sequence. Understanding this chain enables the assistant to: (1) predict when the user is about to sleep, (2) trigger bedtime automations (dim lights, set alarm, enable DND), (3) suggest healthier wind-down alternatives if the user's pre-sleep behavior is associated with poor sleep.
+
+SCOPE BOUNDARY:
+  - Covers the LAST 30 minutes of screen activity before sleep onset.
+  - Starts at the beginning of the user's "wind-down" phase (when they transition from active engagement to passive/sleepy browsing).
+  - Ends at sleep onset (from sleep record).
+  - Must NOT overlap with A5 (evening routine) or A6 (late-night pattern) — those cover the bulk of evening/night activity. D1 covers ONLY the terminal wind-down sequence.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "User's last 3 apps before sleep are always: Instagram → Threads → (screen off). Sleep follows within 10 min of screen off."
+2. "User sets an alarm (Clock app) as the very last action before screen off on weeknights."
+3. "User listens to FLO music as they fall asleep — FLO FOREGROUND_SERVICE remains active after screen off, until sleep onset."
+4. "The gap between last screen activity and sleep onset is consistently 5-15 min (user falls asleep quickly after putting phone down)."
+5. "On nights the user browses Instagram as the last app, sleep onset is 20 min later than nights where the last app is a reading app (Instagram is more stimulating)."
+6. "User's screen brightness decreases in the last 15 min (if detectable) — or night mode / blue light filter activates."
+7. "User plugs in charger (charging notification) right before sleep — this is a reliable sleep-intent signal."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [5] Sleep: sleep onset time (`time` field in sleep record) — this is the anchor.
+  - [1] App Usage: last 5-10 app events before sleep onset. Focus on the FINAL app and the sequence leading to it.
+  - KEYGUARD_SHOWN: the screen-off/lock event closest to sleep onset.
+
+SECONDARY:
+  - [0] Notifications: any notification that arrives during the wind-down and gets ignored (user is falling asleep) vs. clicked (re-engages user, delays sleep).
+  - [2] Network: should be on home Wifi (confirms at home).
+  - Background services: music app still running after screen off.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+The "trigger" for the pre-sleep routine is the user's TRANSITION from active evening usage to wind-down mode. This can be detected by:
+  1. APP TRANSITION: switching from an "active" app (YouTube, gaming) to a "passive" app (Instagram scrolling, reading, music).
+  2. SESSION SHORTENING: app sessions getting shorter (user is losing focus, getting sleepy).
+  3. SCREEN BRIGHTNESS CHANGE: if detectable.
+  4. TIME: if the user consistently starts winding down at the same time.
+  5. SPECIFIC APP OPEN: if the user always opens a specific "bedtime" app (alarm, sleep tracker, meditation).
+
+END BOUNDARY:
+  - Sleep onset from sleep record.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — For each day with a sleep record, identify sleep onset time.
+
+STEP 2 — Working BACKWARDS from sleep onset, collect the last 30 minutes of app/system events:
+  - Find the last KEYGUARD_SHOWN before sleep onset — this is the "final screen off."
+  - Find all app events between (sleep_onset - 30 min) and sleep_onset.
+  - Note any KEYGUARD_HIDDEN/KEYGUARD_SHOWN cycles in this window (user may lock/unlock multiple times as they're falling asleep).
+
+STEP 3 — Identify the "last app" — the final ACTIVITY_RESUMED event before the final screen off.
+
+STEP 4 — Identify the "pre-sleep app sequence" — the last 3-5 distinct apps used before sleep, in order.
+
+STEP 5 — Compute timing metrics:
+  - Time from last app activity to screen off.
+  - Time from screen off to sleep onset (the "falling asleep" gap).
+  - Total wind-down duration (from first wind-down signal to sleep onset).
+
+STEP 6 — Compare pre-sleep sequences across all nights:
+  - Is the last app always the same?
+  - Is the sequence of last 3 apps consistent?
+  - Does the wind-down duration vary? What correlates with longer/shorter wind-down?
+
+STEP 7 — Look for SLEEP-DISRUPTING notifications:
+  - Notifications that arrive during the wind-down window and cause the user to re-engage (KEYGUARD_HIDDEN after KEYGUARD_SHOWN).
+  - Which notification types cause re-engagement? Which are ignored?
+
+STEP 8 — Correlate pre-sleep behavior with sleep quality:
+  - Does the last app affect sleep duration? (e.g., Instagram last → shorter sleep vs. reading app last → longer sleep).
+  - Does the wind-down duration affect sleep quality?
+
+STEP 9 — In the sample data: user was on Instagram (Threads/Barcelona) at 02:00, then sleep started at 03:32. The gap is 1.5 hours — either the user continued browsing without app-switch logs, or there's missing data. Investigate what happened between 02:00 and 03:32.
+
+STEP 10 — Assemble output objects. The `trigger` should be the first wind-down signal. The `prediction` should include:
+  - Expected last app before sleep.
+  - Expected screen-off time.
+  - Expected sleep onset time.
+  - Whether music/audio will continue playing after screen off.
+
+STEP 11 — Validate ≥2 nights with similar pre-sleep sequences. Assign confidence.
+
+IMPORTANT NOTES:
+- The sample shows: FLO + YouTube at 00:47, Dialer at 01:05, screen lock at 01:21, unlock + Instagram at 01:30, Threads at 02:00, sleep at 03:32. This is a late-night pre-sleep chain.
+- Music apps running as FOREGROUND_SERVICE after screen off are common pre-sleep signals — the user falls asleep to music.
+- Charging the phone (if detectable via battery notifications) is a strong sleep-intent signal.
+- The pre-sleep routine is the MOST actionable pattern for sleep-related automations (auto-DND, alarm setting, smart home).
+```
+
+---
+
+## D2. Post-Wake Routine Chain
+
+```
+PATTERN TASK ID: D2
+PATTERN NAME: Post-Wake Routine Chain (Sleep End → Screen On → App Sequence → Location Departure)
+TAXONOMY: Sleep & Health Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task captures the user's MICRO-CHAIN of actions in the first 5-15 minutes after waking up. While A1 (morning routine) covers the entire wake-to-departure arc, D2 zooms into the immediate post-wake sequence: the first screen unlock, the first notification check, the first 2-3 apps opened, and the order in which they're accessed. This micro-chain is extremely consistent and reveals the user's information priorities upon waking. Understanding it enables the assistant to prepare a personalized "morning briefing" screen with exactly the information the user checks first.
+
+SCOPE BOUNDARY:
+  - Covers the FIRST 15 minutes after wake-up (from sleep record's `time_wakeup`).
+  - Must NOT extend into the full morning routine (A1) — D2 is the MICRO-CHAIN only.
+  - Focuses on the SEQUENCE and SPEED of initial actions, not the content of longer sessions.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "Within 1 min of waking, user unlocks phone and checks KakaoTalk notifications (overnight messages)."
+2. "First app opened after wake is always KakaoTalk, second is always Bithumb (crypto check), third is Instagram."
+3. "User dismisses all non-essential notifications (news, promotions) within 2 min of waking, but clicks on messages from specific contacts."
+4. "User checks weather app within 5 min of waking on weekdays (to decide what to wear) but not on weekends."
+5. "The post-wake app sequence takes exactly 8-12 min before the user puts the phone down (presumably to get ready)."
+6. "On short-sleep days (< 6 hours), the post-wake sequence is shorter (skip finance check, go straight to messages)."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [5] Sleep: `time_wakeup` — the anchor for this pattern.
+  - [1] App Usage: first 5-10 app events after wake-up.
+  - KEYGUARD_HIDDEN: first screen unlock after wake-up.
+  - [0] Notifications: overnight notifications and which ones get clicked first.
+
+SECONDARY:
+  - [2] Network: Wifi should be connected (home). If not, user may have woken up elsewhere.
+  - [7] Calendar: first calendar event of the day (may influence urgency of post-wake actions).
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. WAKE-UP: sleep record's `time_wakeup` field.
+  2. FIRST SCREEN UNLOCK: KEYGUARD_HIDDEN event after wake-up.
+  3. ALARM DISMISSAL: if alarm app data is available, the alarm dismiss event.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — For each day with a sleep record, identify `time_wakeup`.
+
+STEP 2 — Find the first KEYGUARD_HIDDEN event at or after `time_wakeup`. Compute the "wake-to-unlock" delay (how long before the user picks up the phone after waking).
+
+STEP 3 — Extract the first 10 app events (ACTIVITY_RESUMED) after the first unlock. Record:
+  - App name.
+  - Time offset from wake-up.
+  - Session duration (time until next ACTIVITY_RESUMED for a different app or ACTIVITY_PAUSED).
+
+STEP 4 — Extract notification interactions in the first 15 min after wake-up:
+  - Which notifications were clicked? In what order?
+  - Which were dismissed?
+  - Were any notifications the TRIGGER for opening an app (notification click → app open)?
+
+STEP 5 — Align post-wake sequences across all days:
+  - Is the first app always the same?
+  - Is the second app always the same?
+  - Is the ORDER consistent even if timing varies?
+  - Compute a "consistency score" for each position in the sequence.
+
+STEP 6 — Look for CONDITIONAL variations:
+  - Weekday vs. weekend: different first app?
+  - Short sleep (< median) vs. normal sleep: shorter sequence? Different apps?
+  - Calendar event in the morning: more urgent sequence (skip leisure apps)?
+  - Specific overnight notification (e.g., important message): changes the first app?
+
+STEP 7 — In the sample data: wake at 10:24, then Settings/FallbackHome (system boot?), Wifi connect, Bixby wake-up service, KakaoTalk notifications (삼성카드 관리비, 아빠 message), then Naver Map at 10:26, then BankSalad at 10:41. This suggests the post-wake sequence is: system boot → notification check → Naver Map → BankSalad.
+
+STEP 8 — Assemble output objects. The `trigger` is wake-up. The `prediction` is the ordered sequence of first actions:
+  e.g., "Unlock phone within 1 min" → "Check KakaoTalk messages" → "Open Naver Map" → "Open BankSalad".
+
+STEP 9 — Validate ≥2 mornings with similar sequences. Assign confidence.
+
+IMPORTANT NOTES:
+- The sample shows system events at 10:24 (IMS device management FOREGROUND_SERVICE_STOP, Settings FallbackHome ACTIVITY_PAUSED) — these suggest the phone may have been restarted or was in a deep sleep mode. This is a system-level pattern, not user-initiated.
+- The "Digital Wellbeing weekly report" notification at 10:24 was dismissed — this is a low-priority notification for the user.
+- The KakaoTalk notification from 삼성카드 about APT관리비 was dismissed within 1 min — user saw it but didn't act on it immediately.
+- The KakaoTalk message from 아빠 was not acted on until 13:50 — low urgency for this user in the morning.
+- The Hogangnono real-estate notification (arrived at 01:26) was clicked at 10:40 — user checked it after waking. This is part of the post-wake notification triage.
+```
+
+---
+
+## D3. Short-Sleep-Day Ripple Effects
+
+```
+PATTERN TASK ID: D3
+PATTERN NAME: Short-Sleep-Day Ripple Effects or Compensating Actions
+TAXONOMY: Sleep & Health Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task identifies how the user's behavior changes on days following insufficient sleep. When a user sleeps significantly less than their average, the next day often shows measurable behavioral changes: later wake time, compressed morning routine, increased caffeine consumption (coffee app), decreased productivity (more social media during work hours), afternoon nap, earlier bedtime, or irritability (shorter message responses). Detecting these ripple effects enables the assistant to adapt its suggestions: recommend caffeine, reschedule non-essential tasks, suggest a power nap, or set an earlier bedtime reminder.
+
+SCOPE BOUNDARY:
+  - Covers the ENTIRE DAY following a short-sleep night.
+  - "Short sleep" is defined as sleep duration < (user's median sleep duration - 1 hour) OR < 6 hours absolute.
+  - Compares short-sleep-day behavior with normal-sleep-day behavior across ALL behavioral dimensions.
+  - Must NOT overlap with D4 (which focuses on the CAUSE of short sleep — late-night behavior). D3 focuses on the EFFECT.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "After sleeping < 6 hours, user wakes 30 min later than usual and skips the morning finance check (goes straight to Maps)."
+2. "On short-sleep days, user orders coffee via app within 30 min of arriving at work (vs. 60 min on normal days)."
+3. "On short-sleep days, user's social media usage during work hours increases by 40% (more breaks, less focus)."
+4. "After a short-sleep night, user takes a 20-30 min nap between 14:00-15:00 (detected by sleep record or phone-idle period)."
+5. "On short-sleep days, user goes to bed 1 hour earlier than usual (compensatory early sleep)."
+6. "On short-sleep days, user's total screen time is 15% lower (less energy to engage with phone)."
+7. "After sleeping < 5 hours, user cancels or reschedules calendar events (detected by calendar modifications)."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [5] Sleep: sleep duration for each night. Compute user's median and identify short-sleep nights.
+  - [1] App Usage: compare app usage patterns on short-sleep days vs. normal days.
+  - [5] Sleep (next night): does the user compensate with longer sleep the following night?
+
+SECONDARY:
+  - [3] Location: does the user skip the commute (WFH) on short-sleep days?
+  - [7] Calendar: does the user cancel/modify events on short-sleep days?
+  - [0] Notifications: does notification response time change on short-sleep days?
+  - [6] Calls: fewer calls on short-sleep days?
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. SHORT SLEEP DETECTED: sleep record shows duration below threshold.
+  2. LATE WAKE-UP: wake time significantly later than weekday average.
+  3. COMBINATION: short sleep + late wake = strong signal for ripple effects.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — Compute sleep statistics across all 28 days:
+  - Median sleep duration.
+  - Mean sleep duration.
+  - Standard deviation.
+  - Identify "short sleep" nights: duration < (median - 1 hour) OR < 6 hours.
+
+STEP 2 — For each short-sleep day, extract the FULL next day's behavioral data.
+
+STEP 3 — For each normal-sleep day, extract the FULL next day's behavioral data (as control).
+
+STEP 4 — Compare short-sleep days vs. normal-sleep days across these dimensions:
+  a. WAKE TIME: later on short-sleep days?
+  b. MORNING ROUTINE DURATION: shorter/compressed?
+  c. MORNING APP SEQUENCE: different apps? Skipped apps?
+  d. COMMUTE TIMING: later departure?
+  e. WORK-HOUR BEHAVIOR: more breaks? More social media? Less productivity app usage?
+  f. CAFFEINE: coffee app usage earlier or more frequent?
+  g. AFTERNOON NAP: any sleep record or phone-idle period in the afternoon?
+  h. EVENING BEHAVIOR: earlier wind-down? Less evening activity?
+  i. NEXT NIGHT SLEEP: longer compensatory sleep?
+  j. NOTIFICATION RESPONSE: slower response times?
+  k. COMMUNICATION: fewer messages/calls?
+
+STEP 5 — For each dimension where a consistent difference is found, document it as a ripple effect.
+
+STEP 6 — In the sample data: sleep duration is 6h52m with sleep starting at 03:32 and wake at 10:24. If the user's median is ~7.5 hours, this is borderline short. If median is ~7 hours, this is normal. Need full 4 weeks sleep data to determine.
+
+STEP 7 — Assemble output objects. The `trigger` is the short-sleep detection. The `prediction` lists the expected behavioral changes:
+  e.g., "Wake 30 min later" → "Skip morning finance check" → "Order coffee within 30 min of work arrival" → "Take afternoon nap" → "Go to bed 1 hour earlier."
+
+STEP 8 — Validate: need ≥2 short-sleep days showing similar ripple effects. Assign confidence.
+
+IMPORTANT NOTES:
+- This pattern requires sufficient variation in sleep duration across the 28 days. If the user sleeps consistently (low variance), there may not be enough short-sleep days to detect ripple effects.
+- The sample shows a 6h52m sleep on what appears to be a Saturday/holiday — the user may not have work obligations, so ripple effects may manifest differently (sleep in, no commute impact).
+- Correlate with D4 (cause of short sleep) to build a complete picture: late-night behavior → short sleep → next-day ripple effects.
+- Even if only 2-3 short-sleep days exist in the data, compare them carefully with normal days for any consistent differences.
+```
+
+---
+
+## D4. Relation Between Late-Night Behavior and Sleep Duration / Fall-Asleep Time
+
+```
+PATTERN TASK ID: D4
+PATTERN NAME: Late-Night Behavior → Sleep Duration / Fall-Asleep Time Correlation
+TAXONOMY: Sleep & Health Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task analyzes the CAUSAL RELATIONSHIP between the user's late-night behavior (what they do before bed) and their sleep outcomes (when they fall asleep, how long they sleep, sleep quality/confidence). While D1 captures the pre-sleep routine chain and A6 captures late-night patterns, D4 specifically focuses on CORRELATING specific late-night behaviors with sleep outcomes. This enables the assistant to warn the user: "You've been on Instagram for 45 min past midnight — based on your history, this will likely result in falling asleep 30 min later and getting < 6 hours of sleep."
+
+SCOPE BOUNDARY:
+  - Examines the relationship between BEHAVIOR (from A6/D1 data) and SLEEP OUTCOMES (from sleep records).
+  - Does NOT re-extract the late-night behavior itself (that's A6) or the pre-sleep chain (that's D1).
+  - Focuses on STATISTICAL CORRELATION between specific behavioral variables and sleep variables.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "On nights the user uses Instagram/Threads past 01:00, sleep onset is delayed by 40 min on average compared to nights without late Instagram use."
+2. "Total screen time after midnight correlates negatively with sleep duration (r = -0.7): every additional 30 min of screen time → 25 min less sleep."
+3. "On nights the user watches YouTube past midnight, they fall asleep faster after screen-off (10 min vs. 20 min) — YouTube may be more tiring than social media."
+4. "On nights with a late-night phone call (after 01:00), sleep onset is delayed by 1+ hour (social stimulation)."
+5. "Nights where the user checks Bithumb (crypto) after midnight correlate with later sleep onset (anxiety/excitement about market)."
+6. "The number of app switches after midnight correlates with later sleep onset — more switching = more restless = harder to fall asleep."
+7. "On nights the user listens to FLO music as the last activity (vs. browsing social media), sleep onset is 15 min earlier."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [5] Sleep: sleep onset time, sleep duration, confidence level.
+  - [1] App Usage: all app events from 22:00 to sleep onset. Compute per-app usage time, last app, number of app switches.
+  - KEYGUARD events: screen on/off cycles after midnight.
+
+SECONDARY:
+  - [6] Calls: late-night calls.
+  - [0] Notifications: late-night notifications that re-engaged the user.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+This pattern is not about a single trigger but about CORRELATIONS. However, for the output format, the "trigger" can be framed as:
+  - "User is still using phone at [TIME] on a [DAY]" → predicted sleep outcome.
+  - "User opened [APP] after midnight" → predicted sleep delay.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — For each night, compute these BEHAVIORAL VARIABLES:
+  a. Last screen activity time (last ACTIVITY_RESUMED or KEYGUARD_HIDDEN).
+  b. Total screen time after 22:00.
+  c. Total screen time after midnight.
+  d. Number of distinct apps used after midnight.
+  e. Number of app switches after midnight.
+  f. Last app before sleep.
+  g. Whether specific apps were used after midnight (binary: Instagram Y/N, YouTube Y/N, Bithumb Y/N, etc.).
+  h. Whether a phone call was made after midnight.
+  i. Whether a stimulating notification was clicked after midnight.
+
+STEP 2 — For each night, compute these SLEEP OUTCOME VARIABLES:
+  a. Sleep onset time.
+  b. Sleep duration.
+  c. Sleep confidence (from sleep record).
+  d. Wake time.
+  e. Screen-off to sleep-onset gap (falling asleep latency).
+
+STEP 3 — Compute CORRELATIONS between behavioral and sleep variables:
+  - For continuous variables (screen time, sleep duration): compute Pearson/Spearman correlation.
+  - For categorical variables (last app, specific app used Y/N): compute group means and differences.
+  - With only 21 data points, formal statistical significance is limited — focus on EFFECT SIZE and CONSISTENCY.
+
+STEP 4 — Identify the strongest correlations:
+  - Which behavioral variable has the strongest association with sleep onset time?
+  - Which behavioral variable has the strongest association with sleep duration?
+  - Are there specific apps that consistently delay sleep?
+
+STEP 5 — Build CONDITIONAL predictions:
+  - "If user is on Instagram at 01:00 → predicted sleep onset: 02:30 (vs. 01:30 baseline)."
+  - "If total post-midnight screen time > 60 min → predicted sleep duration: < 6 hours."
+
+STEP 6 — In the sample data: user was active until at least 02:00 (Threads), sleep at 03:32, duration 6h52m. This is one data point. Need 13 more nights to establish correlations.
+
+STEP 7 — Assemble output objects. Frame each correlation as a predictive pattern:
+  - `trigger`: the late-night behavior (e.g., "Using Instagram after 01:00").
+  - `prediction`: the expected sleep outcome (e.g., "Sleep onset delayed to ~02:30, sleep duration ~6.5 hours").
+  - `reasoning`: the correlation evidence.
+
+STEP 8 — Validate: need ≥2 nights with the same behavioral condition showing similar sleep outcomes. Assign confidence based on consistency.
+
+IMPORTANT NOTES:
+- This is a CORRELATIONAL analysis, not causal. The user may stay up late because they're not sleepy (not because Instagram keeps them awake). However, for practical purposes, the correlation is still useful for prediction.
+- The sample data shows: late-night Instagram/Threads use → sleep at 03:32 → 6h52m sleep. If this pattern repeats on other late-Instagram nights, it's a strong signal.
+- Consider DAY-OF-WEEK as a confound: the user may stay up late on weekends regardless of app usage. Control for this by comparing within weekdays and within weekends separately.
+- If the user has a consistent bedtime (low variance), there may not be enough variation to detect correlations. Report this if applicable.
+```
+
+---
+
+## D5. Weekday Sleep Routine
+
+```
+PATTERN TASK ID: D5
+PATTERN NAME: Weekday Sleep Routine
+TAXONOMY: Sleep & Health Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task characterizes the user's typical sleep pattern on weekday nights (Sunday through Thursday nights, since the user needs to wake up for work Monday through Friday). The weekday sleep routine includes: typical bedtime, typical wake time, typical sleep duration, consistency of these metrics, and any weekday-specific sleep behaviors (alarm usage, sleep-aid apps, consistent pre-bed routine). This baseline is essential for detecting anomalies (D3, D4) and for the assistant to set appropriate bedtime reminders and morning alarms.
+
+SCOPE BOUNDARY:
+  - Covers Sunday night through Thursday night sleep periods (nights before workdays).
+  - Focuses on SLEEP METRICS and CONSISTENCY, not the detailed pre-sleep chain (D1) or post-wake chain (D2).
+  - Must NOT overlap with D6 (weekend sleep routine) — D5 is weekday only.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "Weekday bedtime: 00:30 ± 30 min. Wake time: 07:15 ± 15 min. Duration: 6h45m ± 20 min."
+2. "User sleeps later on Sunday night (01:00) than other weeknights (00:15) — 'Sunday night insomnia' pattern."
+3. "User's weekday sleep is highly consistent (σ < 20 min for both bedtime and wake time) — strong routine."
+4. "User uses an alarm every weekday morning (Clock app activity at wake time) but not on weekends."
+5. "Thursday nights, user sleeps 30 min later than other weeknights (anticipating Friday = less pressure)."
+6. "User's weekday sleep duration has been decreasing over the 4 weeks period (trend detection)."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [5] Sleep: all sleep records for Sunday-Thursday nights. Extract: sleep onset, wake time, duration, confidence.
+
+SECONDARY:
+  - [1] App Usage: alarm app activity at wake time (confirms alarm usage).
+  - [7] Calendar: next-day first event (may influence wake time).
+  - D1 data: pre-sleep routine consistency on weeknights.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. WEEKNIGHT CONTEXT: it's a Sunday-Thursday night → weekday sleep routine applies.
+  2. TIME: approaching the user's typical weekday bedtime → trigger bedtime reminder.
+  3. NEXT-DAY CALENDAR: early meeting tomorrow → suggest earlier bedtime.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — Extract all sleep records and tag each by the night's day-of-week:
+  - Sleep starting Sunday night = "Sunday night" (before Monday).
+  - Sleep starting Monday night = "Monday night" (before Tuesday).
+  - Continue through Thursday night (before Friday).
+
+STEP 2 — For weeknight sleep records, compute:
+  - Mean and standard deviation of sleep onset time.
+  - Mean and standard deviation of wake time.
+  - Mean and standard deviation of sleep duration.
+  - Min and max values for each.
+
+STEP 3 — Check for DAY-SPECIFIC variations within weekdays:
+  - Is Sunday night consistently later (weekend-to-weekday transition)?
+  - Is Thursday night consistently later (pre-Friday relaxation)?
+  - Is any specific weeknight an outlier?
+
+STEP 4 — Check for TRENDS over the 4 weeks period:
+  - Is bedtime getting later or earlier over time?
+  - Is sleep duration increasing or decreasing?
+  - Is there a "sleep debt accumulation" pattern (progressively shorter sleep Mon→Thu, then recovery on weekend)?
+
+STEP 5 — Correlate with next-day events:
+  - Does an early calendar event (before 09:00) correlate with earlier bedtime or earlier wake time?
+  - Does a late calendar event (after 10:00) correlate with later bedtime?
+
+STEP 6 — Assemble output objects. The "pattern" here is the weekday sleep baseline itself:
+  - `trigger`: "It's a weeknight" or "It's [TIME] on a weeknight."
+  - `prediction`: "User will fall asleep at ~[TIME], wake at ~[TIME], sleep ~[DURATION]."
+  - Include variance estimates so the assistant knows the confidence range.
+
+STEP 7 — Validate: need ≥2 weeknights (should have ~15 in 28 days). Assign confidence based on consistency (low σ = high confidence).
+
+IMPORTANT NOTES:
+- The sample data shows sleep on what appears to be a Friday night (April 18→19, Friday→Saturday): sleep at 03:32, wake at 10:24, duration 6h52m. This is a WEEKEND night, not a weeknight. The weekday sleep pattern may be very different.
+- If the user has irregular work hours (shift work, freelance), weekday vs. weekend distinction may not apply. Detect this from the data.
+- Sleep "confidence" from the sleep record (high/medium/low) indicates how reliable the sleep detection is. Weight high-confidence records more heavily.
+```
+
+---
+
+## D6. Weekend Sleep Routine
+
+```
+PATTERN TASK ID: D6
+PATTERN NAME: Weekend Sleep Routine
+TAXONOMY: Sleep & Health Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task characterizes the user's typical sleep pattern on weekend nights (Friday and Saturday nights) and compares it with the weekday baseline (D5). Weekend sleep often differs significantly: later bedtime, later wake time, longer duration (catch-up sleep), no alarm, and different pre-sleep behavior. Understanding the weekend sleep pattern helps the assistant adjust its behavior on weekends (no early morning alarm suggestion, later morning briefing, different bedtime reminder timing).
+
+SCOPE BOUNDARY:
+  - Covers Friday night and Saturday night sleep periods.
+  - Also covers holiday-eve nights (night before a public holiday) if they show weekend-like sleep patterns.
+  - Focuses on SLEEP METRICS and COMPARISON WITH WEEKDAY BASELINE.
+  - Must NOT overlap with D5 (weekday sleep).
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "Weekend bedtime: 02:00 ± 45 min (vs. weekday 00:30). Wake time: 10:00 ± 30 min (vs. weekday 07:15). Duration: 8h00m (vs. weekday 6h45m)."
+2. "User sleeps 1h15m longer on weekends — compensating for weekday sleep debt."
+3. "Friday night bedtime is later than Saturday night (Friday = social night, Saturday = recovery)."
+4. "User does NOT use an alarm on weekend mornings (no Clock app activity at wake time)."
+5. "Weekend sleep onset is more variable (σ = 45 min) than weekday (σ = 20 min) — less structured."
+6. "On holiday eves (like Thursday night before 4·19 holiday), user sleeps on a weekend schedule."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [5] Sleep: all sleep records for Friday and Saturday nights.
+  - D5 data: weekday baseline for comparison.
+
+SECONDARY:
+  - [7] Calendar: holidays, next-day events.
+  - [1] App Usage: alarm app absence on weekend mornings.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. WEEKEND NIGHT CONTEXT: it's Friday or Saturday night → weekend sleep routine applies.
+  2. HOLIDAY EVE: tomorrow is a holiday → weekend sleep routine may apply even on a weeknight.
+  3. NO NEXT-DAY OBLIGATIONS: calendar is empty tomorrow morning → user may adopt weekend sleep pattern.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — Extract all sleep records for Friday and Saturday nights.
+
+STEP 2 — Compute weekend sleep statistics:
+  - Mean and standard deviation of sleep onset, wake time, duration.
+  - Compare with weekday baseline (D5).
+
+STEP 3 — Compute the WEEKDAY-WEEKEND DELTA:
+  - Bedtime shift: how much later does the user go to bed on weekends?
+  - Wake time shift: how much later does the user wake on weekends?
+  - Duration change: how much longer does the user sleep on weekends?
+  - This delta is a key metric — it indicates the user's "social jet lag" (misalignment between weekday and weekend sleep schedules).
+
+STEP 4 — Check Friday vs. Saturday night differences:
+  - Friday night is often the latest (social activities, no next-day pressure).
+  - Saturday night may be earlier (preparing for Sunday activities, or simply recovered from Friday).
+
+STEP 5 — Check holiday-eve nights:
+  - Does the user sleep on a weekend schedule the night before a holiday?
+  - In the sample: April 18 (Friday) night → April 19 (Saturday, also 4·19 holiday). Sleep at 03:32, wake at 10:24. This is a Friday night / holiday eve — likely weekend pattern.
+
+STEP 6 — Assemble output objects. The key output is the weekend sleep profile and its delta from weekday:
+  - `trigger`: "It's a weekend night" or "Tomorrow is a holiday."
+  - `prediction`: "User will fall asleep at ~[TIME], wake at ~[TIME], sleep ~[DURATION]."
+  - `reasoning`: "Weekend sleep is typically [DELTA] later/longer than weekday."
+
+STEP 7 — Validate: need ≥2 weekend nights (should have ~6 in 28 days: 3 Fridays + 3 Saturdays). Assign confidence.
+
+IMPORTANT NOTES:
+- The sample data provides one weekend sleep data point: Friday night, sleep at 03:32, wake at 10:24, 6h52m. This is late but not exceptionally long — the user may have stayed up late but still didn't sleep in much (perhaps due to the holiday plans).
+- "Social jet lag" (large weekday-weekend sleep timing difference) is associated with health risks. If detected, the assistant could gently suggest more consistent sleep timing.
+- If the user's weekend and weekday sleep are similar (low delta), that's also a pattern worth reporting — it indicates a consistent sleeper.
+```
+
+---
+
+## D7. Nap Patterns
+
+```
+PATTERN TASK ID: D7
+PATTERN NAME: Nap Patterns
+TAXONOMY: Sleep & Health Patterns
+
+═══════════════════════════════════════════════════════════════════════════
+DESCRIPTION
+═══════════════════════════════════════════════════════════════════════════
+This task detects daytime naps — short sleep periods occurring outside the main nighttime sleep window. Naps can be detected through: (1) explicit daytime sleep records from the sleep sensor, (2) extended phone-idle periods during the day (no app activity for 20-60 min while at home/office), or (3) specific nap-related app usage (alarm set for 20-30 min, sleep tracking app activated during the day). Understanding nap patterns helps the assistant: predict afternoon drowsiness, suggest optimal nap timing, avoid interrupting naps with notifications, and correlate naps with nighttime sleep quality.
+
+SCOPE BOUNDARY:
+  - Covers any sleep or sleep-like period occurring between 10:00 and 20:00 (daytime).
+  - Must NOT overlap with D5/D6 (nighttime sleep routines) — D7 is daytime only.
+  - Must NOT overlap with D3 (short-sleep ripple effects) — D3 covers the behavioral changes on short-sleep days; D7 specifically captures the NAP itself as a compensating action.
+
+═══════════════════════════════════════════════════════════════════════════
+EXAMPLE PATTERNS YOU SHOULD LOOK FOR
+═══════════════════════════════════════════════════════════════════════════
+1. "User takes a 20-30 min nap on weekday afternoons (14:00-15:00) — detected by phone-idle period at workplace."
+2. "User naps on weekends around 14:00-16:00 — detected by daytime sleep record."
+3. "Naps occur more frequently on days following short nighttime sleep (< 6 hours) — compensatory napping."
+4. "User sets a 25-min alarm before napping (Clock app activity followed by phone-idle period)."
+5. "After napping, user's first action is checking KakaoTalk (catching up on missed messages during nap)."
+6. "User naps only at home, never at workplace — weekend napper."
+7. "Nap duration is consistent: 20-30 min (power nap) or 60-90 min (full sleep cycle)."
+
+═══════════════════════════════════════════════════════════════════════════
+DATA SOURCES TO EXAMINE
+═══════════════════════════════════════════════════════════════════════════
+PRIMARY:
+  - [5] Sleep: any sleep records with onset time between 10:00 and 20:00.
+  - [1] App Usage: phone-idle periods (gaps of 20+ min with no ACTIVITY_RESUMED events) during daytime while at home.
+  - KEYGUARD events: screen-off periods during daytime.
+
+SECONDARY:
+  - [3] Location: nap location (home vs. workplace vs. other).
+  - [0] Notifications: notifications that accumulated during the nap (dismissed in bulk after waking = nap confirmation).
+  - [5] Sleep (previous night): short nighttime sleep → daytime nap correlation.
+
+═══════════════════════════════════════════════════════════════════════════
+TRIGGER IDENTIFICATION
+═══════════════════════════════════════════════════════════════════════════
+  1. TIME: consistent nap time (e.g., always 14:00-15:00).
+  2. SHORT PRIOR NIGHT SLEEP: sleep duration < threshold → nap likely today.
+  3. POST-LUNCH: after lunch (A2 ends) → drowsiness → nap.
+  4. WEEKEND + AFTERNOON: weekend afternoon at home → nap likely.
+  5. ALARM SET: user sets a short alarm (20-30 min) during daytime → nap intent.
+
+END BOUNDARY:
+  - Nap ends when: sleep record ends, or phone activity resumes after the idle period.
+
+═══════════════════════════════════════════════════════════════════════════
+EXTRACTION PROCEDURE
+═══════════════════════════════════════════════════════════════════════════
+STEP 1 — Search for EXPLICIT nap records:
+  - Any sleep record with onset time between 10:00 and 20:00.
+  - These are the most reliable nap detections.
+
+STEP 2 — Search for IMPLICIT nap signals:
+  - Phone-idle periods of 20-90 min during daytime (no app activity, screen off).
+  - Filter out: work-on-computer periods (these also show phone idle but are not naps). Distinguish by:
+    - Location: idle at home on a weekend = likely nap. Idle at workplace on a weekday = likely working on computer.
+    - Time: idle at 14:00-16:00 = more likely nap than idle at 10:00-12:00.
+    - Post-idle behavior: after a nap, user often checks notifications in bulk. After computer work, user may open a work app.
+
+STEP 3 — For each detected nap:
+  - Record: date, day-of-week, start time, duration, location.
+  - Record: previous night's sleep duration (to check for compensatory napping).
+  - Record: pre-nap behavior (last app before nap, any alarm set).
+  - Record: post-nap behavior (first app after nap, notification triage).
+
+STEP 4 — Compute nap statistics:
+  - Frequency: how many naps per week?
+  - Timing: typical nap time?
+  - Duration: typical nap length?
+  - Day-of-week: more naps on weekends? Specific weekdays?
+
+STEP 5 — Correlate naps with nighttime sleep:
+  - Do naps follow short-sleep nights?
+  - Do naps affect the following night's sleep (later bedtime, shorter duration)?
+
+STEP 6 — Assemble output objects. The `trigger` may be:
+  - "It's 14:00 on a weekend after a short-sleep night" → predict nap.
+  - "User set a 25-min alarm at 14:30" → predict nap.
+
+STEP 7 — Validate ≥2 nap occurrences. Assign confidence.
+
+IMPORTANT NOTES:
+- Naps are often ABSENT from the data — many users don't nap regularly. If no naps are detected, report that finding ("User does not appear to nap").
+- The sample data does not show a daytime nap (the sleep record is nighttime: 03:32-10:24). Check the full 4 weeks dataset.
+- Be careful not to confuse phone-idle periods during work (user is on computer) with naps. Use location and time-of-day to disambiguate.
+- Short naps (< 20 min) may not be detected by sleep sensors. Phone-idle periods are the backup detection method.
+- If the user naps with music playing (FLO FOREGROUND_SERVICE active during phone-idle period), this is a nap signal, not a "user is awake listening to music" signal.
+```

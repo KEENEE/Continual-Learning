@@ -6,7 +6,7 @@ from typing import Optional
 import vllm
 from fishfarm.models.vllm_model import VLLMModel
 
-from .base import LLAMA3_COT, Task, get_download_dir
+from .base import LLAMA3_COT, Task, freeze_vllm_model_grads, get_download_dir
 from .user_behavior_eval import UserBehaviorEvaluator
 
 DEFAULT_SAMPLES_PATH = os.path.join(
@@ -138,8 +138,10 @@ class UserBehaviorTask(Task):
             8192 if "Llama-3-8B" in model_id else 16384
         )
         max_tokens = self.max_tokens or (256 if self.use_reasoning_in_target else 64)
-        model = vllm.LLM(
-            model_id,
+        # Gemma 4 checkpoints declare Gemma4ForConditionalGeneration (multimodal)
+        # in config.json. Force the text-only Gemma4ForCausalLM path so vLLM does
+        # not load the vision/audio encoders.
+        llm_kwargs = dict(
             max_model_len=max_model_len,
             gpu_memory_utilization=0.8,
             enforce_eager=True,
@@ -147,10 +149,11 @@ class UserBehaviorTask(Task):
             tensor_parallel_size=tensor_parallel_size,
             download_dir=get_download_dir(),
         )
+        if "gemma-4" in model_id.lower():
+            llm_kwargs["hf_overrides"] = {"architectures": ["Gemma4ForCausalLM"]}
+        model = vllm.LLM(model_id, **llm_kwargs)
         chat_template = self.model_to_template.get(model_id)
-        m = model.llm_engine.model_executor.driver_worker.model_runner.model
-        for _, param in m.named_parameters():
-            param.requires_grad = False
+        freeze_vllm_model_grads(model)
         vllm_model = VLLMModel(
             model,
             sampling_params=vllm.SamplingParams(

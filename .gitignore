@@ -16,5 +16,7 @@ user_usage_3weeks_compressed.json
 user_usage_4weeks*.json
 data_generation_old/[ab]*.json
 data_generation_old/user_behavior_samples.json
+location_relabel_before_after.txt
+user_behavior_samples.json
 .DS_Store
 **/.DS_Store

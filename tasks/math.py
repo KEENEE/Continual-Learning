@@ -8,7 +8,7 @@ from fishfarm.tasks.competation_math import (LatexFormatMathTask, MathSample,
                                              last_boxed_only_string,
                                              remove_boxed)
 
-from .base import Task, get_download_dir
+from .base import Task, freeze_vllm_model_grads, get_download_dir
 
 
 class MathTask(Task):
@@ -98,10 +98,7 @@ class MathTask(Task):
             download_dir=get_download_dir(),
         )
         chat_template = self.model_to_template[model_id]
-        # This may change with vLLM versions.
-        m = model.llm_engine.model_executor.driver_worker.model_runner.model
-        for _, param in m.named_parameters():
-            param.requires_grad = False
+        freeze_vllm_model_grads(model)
         vllm_model = VLLMModel(
             model,
             sampling_params=vllm.SamplingParams(

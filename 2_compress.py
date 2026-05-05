@@ -297,7 +297,7 @@ def _format_korean_duration(total_seconds: int) -> str:
 
 # Sleep stage 1 — locations the user calls "home" (used to ignore sleep rows
 # that happen elsewhere, e.g. naps at the office or transit).
-SLEEP_HOME_LOCATION_IDS = frozenset({10, 42})
+SLEEP_HOME_LOCATION_IDS = frozenset({4})
 
 
 def drop_sleep_records_away_from_home(records: list[dict]) -> list[dict]:
@@ -591,19 +591,119 @@ def _effective_location_id(r: dict) -> int | None:
     return None
 
 
+def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle distance in meters between two lat/lon pairs."""
+    import math
+    R = 6371000.0
+    lat1r, lon1r, lat2r, lon2r = map(math.radians, (lat1, lon1, lat2, lon2))
+    dlat = lat2r - lat1r
+    dlon = lon2r - lon1r
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1r) * math.cos(lat2r) * math.sin(dlon / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+def relabel_locations_with_radius(
+    records: list[dict], radius_m: float = 200.0
+) -> list[tuple[dict, str | None, str]]:
+    """Re-cluster location records using a running-centroid scheme.
+
+    For each location record (in time order):
+      - Find the nearest existing centroid within ``radius_m`` (haversine).
+      - If found: assign that label, update centroid via running mean (count++).
+      - Else: assign a new label (next sequential int starting at 1) with this
+        point as the initial centroid (count=1).
+
+    Updates ``location_label`` and ``location_id`` in place. Returns a list of
+    (record, old_label, new_label) for change-log output.
+    """
+    locs = [r for r in records if r.get("data_type") == "location"]
+    locs.sort(key=lambda r: r.get("time") or "")
+
+    centroids: list[list[float]] = []  # each: [lat, lon, count, label_id]
+    next_label = 1
+    changes: list[tuple[dict, str | None, str]] = []
+    for r in locs:
+        lat = r.get("latitude")
+        lon = r.get("longitude")
+        old_label = r.get("location_label")
+        if lat is None or lon is None:
+            # cannot relabel without coords; keep as-is
+            changes.append((r, old_label, old_label or ""))
+            continue
+        nearest = None
+        nearest_d = float("inf")
+        for c in centroids:
+            d = _haversine_m(lat, lon, c[0], c[1])
+            if d <= radius_m and d < nearest_d:
+                nearest = c
+                nearest_d = d
+        if nearest is None:
+            centroids.append([float(lat), float(lon), 1, next_label])
+            new_label_id = next_label
+            next_label += 1
+        else:
+            n = nearest[2]
+            nearest[0] = (nearest[0] * n + lat) / (n + 1)
+            nearest[1] = (nearest[1] * n + lon) / (n + 1)
+            nearest[2] = n + 1
+            new_label_id = int(nearest[3])
+        new_label = f"Location {new_label_id}"
+        r["location_label"] = new_label
+        r["location_id"] = new_label_id
+        changes.append((r, old_label, new_label))
+    return changes
+
+
+def write_location_relabel_log(
+    changes: list[tuple[dict, str | None, str]], path: str
+) -> None:
+    """Write before/after location-label table to ``path``."""
+    n_changed = sum(1 for _, old, new in changes if old != new)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"# Location relabel log — {len(changes)} records, "
+                f"{n_changed} relabeled\n")
+        f.write(f"{'time':<20s}  {'lat':>10s}  {'lon':>11s}  "
+                f"{'old':<16s}  {'new':<16s}  changed\n")
+        f.write("-" * 90 + "\n")
+        for r, old, new in changes:
+            t = (r.get("time") or "")[:19]
+            lat = r.get("latitude")
+            lon = r.get("longitude")
+            lat_s = f"{lat:>10.5f}" if isinstance(lat, (int, float)) else f"{'?':>10}"
+            lon_s = f"{lon:>11.5f}" if isinstance(lon, (int, float)) else f"{'?':>11}"
+            mark = "*" if old != new else ""
+            f.write(f"{t:<20s}  {lat_s}  {lon_s}  "
+                    f"{str(old or ''):<16s}  {str(new):<16s}  {mark}\n")
+
+
+def dedupe_consecutive_locations(records: list[dict]) -> list[dict]:
+    """Drop a location record whose ``location_label`` equals the
+    previously-seen location label (in time-sorted order). Keeps the first
+    occurrence of each location run; later events of the same location are
+    removed. Non-location records are passed through unchanged.
+    """
+    records.sort(key=lambda r: r.get("time") or "")
+    out: list[dict] = []
+    last_loc_label: str | None = None
+    for r in records:
+        if r.get("data_type") == "location":
+            cur = r.get("location_label")
+            if cur == last_loc_label:
+                continue
+            last_loc_label = cur
+        out.append(r)
+    return out
+
+
 def moved_prefix(records: list[dict]) -> None:
-    prev_id: int | None = None
+    """Prefix every location_label with 'Moved to ' (after dedup, every
+    remaining location record represents a movement to a different cluster)."""
     for r in records:
         if r.get("data_type") != "location":
             continue
-        lid = _effective_location_id(r)
-        if lid is None:
-            continue
-        if prev_id is not None and lid != prev_id:
-            cur = r.get("location_label")
-            if isinstance(cur, str) and cur and not cur.startswith("Moved to "):
-                r["location_label"] = "Moved to " + cur
-        prev_id = lid
+        cur = r.get("location_label")
+        if isinstance(cur, str) and cur and not cur.startswith("Moved to "):
+            r["location_label"] = "Moved to " + cur
 
 
 def _movement_start_and_end_labels(r: dict) -> dict | None:
@@ -852,6 +952,12 @@ def main() -> None:
     records = thin_consecutive_connection(records)
     records = dedup_user_interaction_after_resume(records)
 
+    # Location 재라벨 (200m 반경) → 연속 동일 라벨 dedup → "Moved to " prefix
+    relabel_changes = relabel_locations_with_radius(records, radius_m=200.0)
+    write_location_relabel_log(relabel_changes, "location_relabel_before_after.txt")
+    records = dedupe_consecutive_locations(records)
+    moved_prefix(records)
+
     # DUration 데이터(movement, sleep, call) 시작 끝 데이터 추가
     records = drop_sleep_records_away_from_home(records)
     records = drop_short_sleep_records(records)
@@ -860,9 +966,7 @@ def main() -> None:
 
     after_drop = len(records)
 
-
     # COLUMN 단위 삭제
-    moved_prefix(records)
     records = abbreviate_package_prefixes(records)
     drop_keys_in_app_usage(records)
     records = strip_empty_keys(records)

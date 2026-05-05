@@ -8,36 +8,54 @@ import torch.utils
 import vllm
 
 
-def load_hf_params_to_vllm(param: Dict, llm: vllm.LLM) -> None:
-    """Load weights from HF transformer model to vLLM model."""
+def _try_get_parameter(model, name: str):
+    """Return model.get_parameter(name) or None if the parameter is absent.
 
-    model = llm.llm_engine.model_executor.driver_worker.model_runner.model
-    num_layers = model.config.num_hidden_layers
+    Some checkpoints (e.g. Gemma 4 with tie_word_embeddings=True) don't
+    expose lm_head as its own parameter, so callers must skip silently.
+    """
+    try:
+        return model.get_parameter(name)
+    except AttributeError:
+        return None
 
-    # Load embeddings layer weights.
-    model_param = model.get_parameter("model.embed_tokens.weight")
-    model_param.copy_(
-        param["model.embed_tokens.weight"][: model_param.shape[0]]
-        .to(model_param.dtype)
-        .to(model_param.device)
+
+def _copy_weights(model, param: Dict) -> None:
+    """Copy a HF state-dict into a live vLLM nn.Module.
+
+    Assumes the standard Llama-style parameter layout that Gemma 4 also uses
+    (q/k/v/o_proj on attention, gate/up/down_proj on MLP, layernorms named
+    input_layernorm and post_attention_layernorm). PLE and KV-shared
+    embeddings on Gemma 4 are not present in the HF state-dict for those
+    keys and are simply skipped.
+    """
+    config = getattr(model, "config", None)
+    text_config = getattr(config, "text_config", config)
+    num_layers = text_config.num_hidden_layers
+
+    # Embedding & lm_head — lm_head may be tied (Gemma 4) and absent.
+    embed = model.get_parameter("model.embed_tokens.weight")
+    embed.copy_(
+        param["model.embed_tokens.weight"][: embed.shape[0]]
+        .to(embed.dtype)
+        .to(embed.device)
     )
-    model_param = model.get_parameter("lm_head.weight")
-    model_param.copy_(
-        param["lm_head.weight"][: model_param.shape[0]]
-        .to(model_param.dtype)
-        .to(model_param.device)
-    )
+    lm_head = _try_get_parameter(model, "lm_head.weight")
+    if lm_head is not None and "lm_head.weight" in param:
+        lm_head.copy_(
+            param["lm_head.weight"][: lm_head.shape[0]]
+            .to(lm_head.dtype)
+            .to(lm_head.device)
+        )
 
-    # Load the final layernorm weights.
-    model_param = model.get_parameter("model.norm.weight")
-    model_param.copy_(
-        param["model.norm.weight"].to(model_param.dtype).to(model_param.device)
+    final_norm = model.get_parameter("model.norm.weight")
+    final_norm.copy_(
+        param["model.norm.weight"].to(final_norm.dtype).to(final_norm.device)
     )
 
     for i in range(num_layers):
-        # Load qkv_proj weights.
-        model_param = model.get_parameter(f"model.layers.{i}.self_attn.qkv_proj.weight")
-        model_param.copy_(
+        qkv = model.get_parameter(f"model.layers.{i}.self_attn.qkv_proj.weight")
+        qkv.copy_(
             torch.cat(
                 [
                     param[f"model.layers.{i}.self_attn.q_proj.weight"],
@@ -46,12 +64,11 @@ def load_hf_params_to_vllm(param: Dict, llm: vllm.LLM) -> None:
                 ],
                 dim=0,
             )
-            .to(model_param.dtype)
-            .to(model_param.device)
+            .to(qkv.dtype)
+            .to(qkv.device)
         )
-        # Load gate_up_proj weights.
-        model_param = model.get_parameter(f"model.layers.{i}.mlp.gate_up_proj.weight")
-        model_param.copy_(
+        gate_up = model.get_parameter(f"model.layers.{i}.mlp.gate_up_proj.weight")
+        gate_up.copy_(
             torch.cat(
                 [
                     param[f"model.layers.{i}.mlp.gate_proj.weight"],
@@ -59,37 +76,48 @@ def load_hf_params_to_vllm(param: Dict, llm: vllm.LLM) -> None:
                 ],
                 dim=0,
             )
-            .to(model_param.dtype)
-            .to(model_param.device)
+            .to(gate_up.dtype)
+            .to(gate_up.device)
         )
-        # Load o_proj and down_proj weights.
-        model_param = model.get_parameter(f"model.layers.{i}.self_attn.o_proj.weight")
-        model_param.copy_(
+        o = model.get_parameter(f"model.layers.{i}.self_attn.o_proj.weight")
+        o.copy_(
             param[f"model.layers.{i}.self_attn.o_proj.weight"]
-            .to(model_param.dtype)
-            .to(model_param.device)
+            .to(o.dtype)
+            .to(o.device)
         )
-        model_param = model.get_parameter(f"model.layers.{i}.mlp.down_proj.weight")
-        model_param.copy_(
+        down = model.get_parameter(f"model.layers.{i}.mlp.down_proj.weight")
+        down.copy_(
             param[f"model.layers.{i}.mlp.down_proj.weight"]
-            .to(model_param.dtype)
-            .to(model_param.device)
+            .to(down.dtype)
+            .to(down.device)
         )
-        # Load layer_norm weights.
-        model_param = model.get_parameter(f"model.layers.{i}.input_layernorm.weight")
-        model_param.copy_(
+        in_ln = model.get_parameter(f"model.layers.{i}.input_layernorm.weight")
+        in_ln.copy_(
             param[f"model.layers.{i}.input_layernorm.weight"]
-            .to(model_param.dtype)
-            .to(model_param.device)
+            .to(in_ln.dtype)
+            .to(in_ln.device)
         )
-        model_param = model.get_parameter(
+        post_ln = model.get_parameter(
             f"model.layers.{i}.post_attention_layernorm.weight"
         )
-        model_param.copy_(
+        post_ln.copy_(
             param[f"model.layers.{i}.post_attention_layernorm.weight"]
-            .to(model_param.dtype)
-            .to(model_param.device)
+            .to(post_ln.dtype)
+            .to(post_ln.device)
         )
+
+
+def load_hf_params_to_vllm(param: Dict, llm: vllm.LLM) -> None:
+    """Load weights from HF transformer model to vLLM model.
+
+    Routes through vLLM's V1 ``apply_model`` when available and falls back
+    to the V0 ``driver_worker.model_runner.model`` path otherwise.
+    """
+    if hasattr(llm, "apply_model"):
+        llm.apply_model(lambda m: _copy_weights(m, param))
+        return
+    model = llm.llm_engine.model_executor.driver_worker.model_runner.model
+    _copy_weights(model, param)
 
 
 def eval_model(vllm_model, evaluator, ix=None):

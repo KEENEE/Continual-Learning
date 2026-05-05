@@ -4,7 +4,7 @@ from datasets import load_dataset
 from fishfarm.models.vllm_model import VLLMModel
 from fishfarm.tasks.ai2_arc import Ai2ArcSample, Ai2ArcTask
 
-from .base import LLAMA3_COT, Task, get_download_dir
+from .base import LLAMA3_COT, Task, freeze_vllm_model_grads, get_download_dir
 
 choices = ["A", "B", "C", "D", "E"]
 
@@ -128,10 +128,7 @@ class AI2ArcTask(Task):
             download_dir=get_download_dir(),
         )
         chat_template = self.model_to_template[model_id]
-        # This may change with vLLM versions.
-        m = model.llm_engine.model_executor.driver_worker.model_runner.model
-        for _, param in m.named_parameters():
-            param.requires_grad = False
+        freeze_vllm_model_grads(model)
         vllm_model = VLLMModel(
             model,
             sampling_params=vllm.SamplingParams(

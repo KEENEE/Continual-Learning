@@ -1,4 +1,38 @@
-# User Behavior — Phase 2: Preference-Learning Pipeline (rev 2)
+# User Behavior — Phase 2: Preference-Learning Pipeline (rev 4)
+
+## Rev 4 changes (vs rev 3)
+
+- **E.1 algorithm replaced** with iterative-drop using marginal dominance + confidence test:
+  - For each (trigger, gold) sequential pair, marginally test each ctx dim D: drop D iff for *every* value v of D, the dominant gold under (trigger, D=v) is still ``gold`` AND P(gold|trigger, D=v) ≥ ``min_confidence``.
+  - The drop test is *marginal* (not conditional on other kept dims), so iteration order is irrelevant.
+  - Reuses ``--min_confidence`` (no separate ``--majority_threshold`` argument).
+  - After dim dropping, candidates of (trigger, gold) are split into patterns by the *kept* dims' value combinations (each unique kept-tuple = one pattern).
+- **Context-onset patterns bypass E.1**. Their context IS the trigger; minimizing it would erase information. Each unique `(CONTEXT_ONSET, full_ctx, gold)` becomes its own pattern directly.
+- ``--majority_threshold`` CLI flag removed.
+
+---
+
+## Rev 3 changes (vs rev 2)
+
+- **Stage 2 step order**: A → **C (coalesce)** → **B (frequency filter, no blocklist)** → D → E → E.1 → **E.2 (occurrence/confidence filter)** → F → G → H → I.
+- **Step B**: drop events with `count < min_occurrence` only. No hand-curated blocklist; everything frequent enough is a trigger/gold candidate.
+- **Step E** rewrite:
+  - *Sequential candidates*: for every event X, every event Y in `(t_X − Δt, t_X)` becomes a candidate `(Y, ctx_at_X, X)`. (Old code kept only the single previous event; rev 3 keeps all within Δt.)
+  - *Context-onset candidates*: when context (day/hour_bin/location/movement) **changes** vs prior event, emit a virtual `Context onset` event. For every X within Δt of the change, add `(context_onset, new_ctx, X)`.
+- **Step E.1** simplified: group candidates by `(trigger, gold)`. Within each group, the minimal context = intersection of dim values that all candidates share. Branching is implicit via different `gold` values.
+- **Step E.2** (new): compute `occurrence` and `confidence` once at the end, then drop patterns failing thresholds.
+- **Step G**:
+  - `emergent` / `decaying` are now opt-in flags (`--use_emergent` / `--use_decaying`, default `False`).
+  - `always` and `shifted`: each half must have `occurrence ≥ args.min_occurrence // 2`.
+- **Step H**:
+  - Context-only patterns: no `[Trigger]` block; instead `Context: <context>` line.
+  - History sliced by `stm_window_days` only (no `max_stm_tokens` budget).
+- **Step I (regular split)**: a sample at trigger_time t is **included only if more than `occurrence // 2` prior occurrences of the same pattern exist before t**. Otherwise dropped from both train and test.
+- **CLI**: `min_occurrence`, `min_confidence`, `delta_t_min` marked `[important]` with direction-of-effect comments.
+
+---
+
+# Original plan (rev 2)
 
 ## Status of Phase 1 (frozen)
 

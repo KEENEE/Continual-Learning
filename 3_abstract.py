@@ -14,7 +14,50 @@ Run:
 
 import json
 import os
+import re
+import unicodedata
 from collections import defaultdict
+
+
+# Unicode ranges for emoji / pictographs / dingbats / regional indicators / VS-16.
+# Covers ⚠️ 🔔 📈 📉 💌 etc. Korean Hangul (U+AC00–U+D7A3) and CJK letters are
+# outside these ranges, so this regex won't strip them.
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001F5FF"   # symbols & pictographs
+    "\U0001F600-\U0001F64F"   # emoticons
+    "\U0001F680-\U0001F6FF"   # transport & map
+    "\U0001F700-\U0001F77F"   # alchemical
+    "\U0001F780-\U0001F7FF"   # geometric extended
+    "\U0001F800-\U0001F8FF"   # arrows-C
+    "\U0001F900-\U0001F9FF"   # supplemental symbols
+    "\U0001FA00-\U0001FA6F"   # chess
+    "\U0001FA70-\U0001FAFF"   # symbols extended-A
+    "\U00002300-\U000023FF"   # misc technical (⌚ ⌛ ⏰ ⏱ ⏳ etc.)
+    "\U00002600-\U000026FF"   # misc symbols (☀ ☁ ⚠ etc.)
+    "\U00002700-\U000027BF"   # dingbats (✂ ✈ ✉ etc.)
+    "\U00002B00-\U00002BFF"   # misc symbols & arrows (⭐ ⬛ ⬜ etc.)
+    "\U0001F1E6-\U0001F1FF"   # regional indicators (flags)
+    "\U0000FE0F"              # variation selector-16
+    "\U0000200D"              # zero-width joiner
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def _strip_emoji(s: str) -> str:
+    """Remove emoji-class chars + Unicode format (Cf) and control (Cc) chars.
+
+    Cf covers invisible bidi marks like LRM (U+200E), RLM, FSI/PDI (U+2068/U+2069),
+    LRI/RLI/PDF, ZWJ/ZWNJ, BOM, etc.
+    Cc covers ASCII control characters; titles shouldn't contain newlines/tabs
+    after the upstream `.strip()` so this is safe.
+    """
+    if not s:
+        return s
+    s = _EMOJI_RE.sub("", s)
+    s = "".join(c for c in s if unicodedata.category(c) not in ("Cf", "Cc"))
+    return s.strip()
 
 
 # ============================================================================
@@ -268,12 +311,17 @@ def _truncate(s, n=80):
     return s if len(s) <= n else s[:n].rstrip() + "…"
 
 
-def _en_duration(d):
+def _simplify_duration(d):
     """Convert Korean duration like '5분 2초', '2시간 28초', '10시간 25분 27초'
     to English short form '5m 2s', '2h 28s', '10h 25m 27s'."""
     if not d:
         return d
-    return d.replace("시간", "h").replace("분", "m").replace("초", "s")
+    elif "시간" in d:
+        return d.split("시간")[0]+"h"
+    elif "분" in d:
+        return d.split("분")[0]+"m"
+    elif "초" in d:
+        return d.replace("초", "s")
 
 
 # ============================================================================
@@ -291,32 +339,58 @@ def abstract_app(item):
     return f"Use {app} app"
 
 
+def _hangul_count(s: str) -> int:
+    """Number of Hangul syllables (U+AC00–U+D7A3) in s."""
+    return sum(1 for c in s if "가" <= c <= "힣")
+
+
+_NUMBER_RE = re.compile(r"\d[\d,.]*")
+
+
+def _strip_numbers(s: str) -> str:
+    """Remove digit sequences (with commas/dots) and collapse extra spaces.
+    Consolidates variants like '출금 100,000원' / '출금 50,000원' → '출금 원'."""
+    s = _NUMBER_RE.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def abstract_noti(item):
+    """Produce a notification line.
+
+    Two-stage title normalization:
+      1) Strip digit sequences (incl. comma-grouped numbers) so that
+         numeric-variant titles ('출금 100,000원' / '출금 50,000원') collapse
+         to a single representative line ('출금 원').
+      2) If the title still has ≥10 Hangul characters after stripping, drop it
+         entirely (long titles are typically one-off promo/descriptive
+         messages); keep only the sender app.
+    """
     app = _humanize_app_name(item.get("app_name", ""))
-    title = (item.get("title") or "").strip()
-    text = _truncate(item.get("text") or "", 80)
-    if title and text:
-        return f"Notification from {app}: \"{title} — {text}\""
-    if title:
-        return f"Notification from {app}: \"{title}\""
-    if text:
-        return f"Notification from {app}: \"{text}\""
-    return f"Notification from {app}"
+    title = _strip_emoji((item.get("title") or "").strip())
+    if not title:
+        return f"Notification from {app}"
+    title = _strip_numbers(title)
+    if not title:
+        return f"Notification from {app}"
+    if _hangul_count(title) >= 10:
+        return f"Notification from {app}"
+    return f"Notification from {app}: \"{title}\""
 
 
 def abstract_location(item):
     label = item.get("location_label", "") or ""
-    if label.startswith("Moved to "):
-        return f"Move to {label[len('Moved to '):]}"
-    return f"Stay at {label}"
+    # if label.startswith("Moved to "):
+    #     label = label[len("Moved to "):]
+    return label
 
 
 def abstract_movement(item):
     activity = item.get("activity", "")
-    duration = _en_duration(item.get("duration"))
+    duration = _simplify_duration(item.get("duration"))
     base = MOVEMENT.get(activity, activity)
-    if duration:
-        return f"{base} (lasted {duration})"
+    # if duration:
+    #     return f"{base} (lasted {duration})"
     return base
 
 
@@ -346,10 +420,10 @@ def abstract_connection(item):
 
 def abstract_sleep(item):
     cls = item.get("class", "")
-    duration = _en_duration(item.get("duration"))
+    duration = _simplify_duration(item.get("duration"))
     base = SLEEP_CLASS.get(cls, cls)
-    if duration:
-        return f"{base} (slept {duration})" if "Wake" in base or "End" in base else base
+    # if duration:
+    #     return f"{base} (slept {duration})" if "Wake" in base or "End" in base else base
     return base
 
 
@@ -369,7 +443,7 @@ def abstract_calendar(item):
 def abstract_call(item):
     label = item.get("call_type_label", "")
     name = item.get("contact_name", "") or ""
-    duration = _en_duration(item.get("duration"))
+    duration = _simplify_duration(item.get("duration"))
     if name == "저장되지 않은 번호":
         name = "unknown"
     base = CALL_TYPE.get(label, label)
@@ -377,8 +451,8 @@ def abstract_call(item):
         f" to {name}" if "Outgoing" in base else f" from {name}"
     )
     line = f"{base}{contact_part}"
-    if duration:
-        line = f"{line} (duration: {duration})"
+    # if duration:
+    #     line = f"{line} (duration: {duration})"
     return line
 
 

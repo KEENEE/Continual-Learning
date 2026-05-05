@@ -60,6 +60,25 @@ def get_download_dir():
         return os.path.expanduser("~") + "/.cache/huggingface/models"
 
 
+def freeze_vllm_model_grads(llm):
+    """Set requires_grad=False on every parameter of the underlying vLLM model.
+
+    Works on both legacy V0 (driver_worker.model_runner.model) and V1
+    (apply_model) engine layouts so existing callers keep working after
+    the dependency bump.
+    """
+
+    def _freeze(model):
+        for _, param in model.named_parameters():
+            param.requires_grad = False
+
+    if hasattr(llm, "apply_model"):
+        llm.apply_model(_freeze)
+        return
+    model = llm.llm_engine.model_executor.driver_worker.model_runner.model
+    _freeze(model)
+
+
 class Task(ABC):
     def __init__(
         self,

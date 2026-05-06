@@ -13,7 +13,7 @@ class Mbpp2Task(Task):
         self.model_to_template = {
             "meta-llama/Meta-Llama-3-8B-Instruct": CODE_PROMPT,
             "mistralai/Mistral-7B-Instruct-v0.3": CODE_PROMPT,
-            "google/gemma-4-E4B": None,
+            "google/gemma-4-E4B-it": None,
         }
         self.system_msg = (
             "You are an exceptionally intelligent coding assistant that "

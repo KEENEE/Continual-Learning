@@ -29,7 +29,7 @@ class Gsm8kTask(Task):
                 "{% endif %}"
             ),
             "mistralai/Mistral-7B-Instruct-v0.3": None,
-            "google/gemma-4-E4B": None,
+            "google/gemma-4-E4B-it": None,
         }
         self.system_msg = (
             "Below is an instruction that describes a task."

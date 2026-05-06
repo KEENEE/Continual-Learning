@@ -1,7 +1,0 @@
-base_model:
-  _target_: base_model.Gemma4E4B
-
-
-base_model_name: gemma4e4b
-
-reference_params_results: []

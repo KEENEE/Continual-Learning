@@ -113,6 +113,23 @@ def load_hf_params_to_vllm(param: Dict, llm: vllm.LLM) -> None:
     Routes through vLLM's V1 ``apply_model`` when available and falls back
     to the V0 ``driver_worker.model_runner.model`` path otherwise.
     """
+    # The HF gemma 4 checkpoint is loaded via Gemma4ForConditionalGeneration,
+    # which nests the text submodule under model.language_model.*. vLLM's
+    # text-only Gemma4ForCausalLM expects model.* (no language_model.
+    # segment), so remap before _copy_weights tries to read those keys.
+    if any("language_model" in k for k in param):
+        prefix = "model.language_model."
+        remapped: Dict = {}
+        for k, v in param.items():
+            if any(s in k for s in (
+                "vision_tower", "audio_tower", "embed_vision", "embed_audio",
+            )):
+                continue
+            if k.startswith(prefix):
+                k = "model." + k[len(prefix):]
+            remapped[k] = v
+        param = remapped
+
     if hasattr(llm, "apply_model"):
         llm.apply_model(lambda m: _copy_weights(m, param))
         return

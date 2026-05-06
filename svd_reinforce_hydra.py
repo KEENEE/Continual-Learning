@@ -173,10 +173,11 @@ def main(cfg):
         print("Decomposed params not found. Decomposing on GPU...")
         decomposed_params = {}
         for k, v in base_params.items():
-            # Gemma 4's Gemma4ClippableLinear registers 0-D buffers
-            # (input_min/max, output_min/max) that pass the "norm not in k"
-            # check but aren't 2-D matrices. Require >=2-D explicitly.
-            if "norm" not in k and v.ndim >= 2:
+            # Only MLP weight matrices are consumed downstream by the
+            # policy and compose_new_params; SVDing other tensors is
+            # wasted work and trips cuSOLVER on large non-MLP matrices
+            # (e.g. Gemma 4's per-layer embedding table).
+            if "mlp" in k and v.ndim >= 2:
                 print(k)
                 # torch.linalg.svd is faster than the deprecated torch.svd on GPU.
                 # full_matrices=False -> reduced SVD: O(min(m,n)^2 * max(m,n)).

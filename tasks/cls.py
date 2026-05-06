@@ -106,6 +106,7 @@ class ClsTask(Task):
                 "{% endif %}"
             ),
             "mistralai/Mistral-7B-Instruct-v0.3": None,
+            "google/gemma-4-E4B": None,
         }
         self.system_msg = """
     # Analyze the given question and classify it into one of four categories: 'code', 'math', 'reasoning' or 'other'. Follow these guidelines:
@@ -229,8 +230,7 @@ class ClsTask(Task):
 
     def get_vllm_model(self, model_id, tensor_parallel_size=1) -> VLLMModel:
         """Load a vLLM model."""
-        model = vllm.LLM(
-            model_id,
+        llm_kwargs = dict(
             max_model_len=2048,
             gpu_memory_utilization=0.8,
             enforce_eager=True,
@@ -238,6 +238,9 @@ class ClsTask(Task):
             tensor_parallel_size=tensor_parallel_size,
             download_dir=get_download_dir(),
         )
+        if "gemma-4" in model_id.lower():
+            llm_kwargs["hf_overrides"] = {"architectures": ["Gemma4ForCausalLM"]}
+        model = vllm.LLM(model_id, **llm_kwargs)
         chat_template = self.model_to_template[model_id]
         freeze_vllm_model_grads(model)
         vllm_model = VLLMModel(

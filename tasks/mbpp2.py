@@ -13,6 +13,7 @@ class Mbpp2Task(Task):
         self.model_to_template = {
             "meta-llama/Meta-Llama-3-8B-Instruct": CODE_PROMPT,
             "mistralai/Mistral-7B-Instruct-v0.3": CODE_PROMPT,
+            "google/gemma-4-E4B": None,
         }
         self.system_msg = (
             "You are an exceptionally intelligent coding assistant that "
@@ -95,8 +96,7 @@ class Mbpp2Task(Task):
 
     def get_vllm_model(self, model_id, tensor_parallel_size=1) -> VLLMModel:
         """Load a vLLM model."""
-        model = vllm.LLM(
-            model_id,
+        llm_kwargs = dict(
             max_model_len=1024,
             gpu_memory_utilization=0.8,
             enforce_eager=True,
@@ -104,6 +104,12 @@ class Mbpp2Task(Task):
             tensor_parallel_size=tensor_parallel_size,
             download_dir=get_download_dir(),
         )
+        # Gemma 4 checkpoints declare Gemma4ForConditionalGeneration (multimodal)
+        # in config.json. Force the text-only Gemma4ForCausalLM path so vLLM
+        # does not load the vision/audio encoders.
+        if "gemma-4" in model_id.lower():
+            llm_kwargs["hf_overrides"] = {"architectures": ["Gemma4ForCausalLM"]}
+        model = vllm.LLM(model_id, **llm_kwargs)
         chat_template = self.model_to_template[model_id]
         freeze_vllm_model_grads(model)
         vllm_model = VLLMModel(

@@ -29,6 +29,7 @@ class Gsm8kTask(Task):
                 "{% endif %}"
             ),
             "mistralai/Mistral-7B-Instruct-v0.3": None,
+            "google/gemma-4-E4B": None,
         }
         self.system_msg = (
             "Below is an instruction that describes a task."
@@ -95,8 +96,7 @@ class Gsm8kTask(Task):
 
     def get_vllm_model(self, model_id, tensor_parallel_size=1) -> VLLMModel:
         """Load a vLLM model."""
-        model = vllm.LLM(
-            model_id,
+        llm_kwargs = dict(
             max_model_len=1024,
             gpu_memory_utilization=0.8,
             enforce_eager=True,
@@ -104,6 +104,9 @@ class Gsm8kTask(Task):
             tensor_parallel_size=tensor_parallel_size,
             download_dir=get_download_dir(),
         )
+        if "gemma-4" in model_id.lower():
+            llm_kwargs["hf_overrides"] = {"architectures": ["Gemma4ForCausalLM"]}
+        model = vllm.LLM(model_id, **llm_kwargs)
         chat_template = self.model_to_template[model_id]
         freeze_vllm_model_grads(model)
         vllm_model = VLLMModel(

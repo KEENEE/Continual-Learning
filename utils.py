@@ -21,120 +21,81 @@ def _try_get_parameter(model, name: str):
 
 
 def _copy_weights(model, param: Dict) -> None:
-    """Copy a HF state-dict into a live vLLM nn.Module.
+    """Copy MLP weights from a (possibly partial) HF state-dict into a
+    live vLLM nn.Module.
 
-    Assumes the standard Llama-style parameter layout that Gemma 4 also uses
-    (q/k/v/o_proj on attention, gate/up/down_proj on MLP, layernorms named
-    input_layernorm and post_attention_layernorm). PLE and KV-shared
-    embeddings on Gemma 4 are not present in the HF state-dict for those
-    keys and are simply skipped.
+    Only mlp.{gate,up,down}_proj.weight ever changes during training;
+    every other tensor stays at the values vLLM already loaded at
+    startup, so we don't re-copy them. Tolerates partial dicts so callers
+    can ship one layer per IPC call.
+
+    Assumes vLLM packs gate+up into gate_up_proj — both Llama 3 and
+    gemma 4 dense use that layout in vLLM.
     """
     config = getattr(model, "config", None)
     text_config = getattr(config, "text_config", config)
     num_layers = text_config.num_hidden_layers
 
-    # Embedding & lm_head — lm_head may be tied (Gemma 4) and absent.
-    embed = model.get_parameter("model.embed_tokens.weight")
-    embed.copy_(
-        param["model.embed_tokens.weight"][: embed.shape[0]]
-        .to(embed.dtype)
-        .to(embed.device)
-    )
-    lm_head = _try_get_parameter(model, "lm_head.weight")
-    if lm_head is not None and "lm_head.weight" in param:
-        lm_head.copy_(
-            param["lm_head.weight"][: lm_head.shape[0]]
-            .to(lm_head.dtype)
-            .to(lm_head.device)
-        )
-
-    final_norm = model.get_parameter("model.norm.weight")
-    final_norm.copy_(
-        param["model.norm.weight"].to(final_norm.dtype).to(final_norm.device)
-    )
-
     for i in range(num_layers):
-        qkv = model.get_parameter(f"model.layers.{i}.self_attn.qkv_proj.weight")
-        qkv.copy_(
-            torch.cat(
-                [
-                    param[f"model.layers.{i}.self_attn.q_proj.weight"],
-                    param[f"model.layers.{i}.self_attn.k_proj.weight"],
-                    param[f"model.layers.{i}.self_attn.v_proj.weight"],
-                ],
-                dim=0,
+        gate_key = f"model.layers.{i}.mlp.gate_proj.weight"
+        up_key = f"model.layers.{i}.mlp.up_proj.weight"
+        if gate_key in param and up_key in param:
+            gate_up = model.get_parameter(
+                f"model.layers.{i}.mlp.gate_up_proj.weight"
             )
-            .to(qkv.dtype)
-            .to(qkv.device)
-        )
-        gate_up = model.get_parameter(f"model.layers.{i}.mlp.gate_up_proj.weight")
-        gate_up.copy_(
-            torch.cat(
-                [
-                    param[f"model.layers.{i}.mlp.gate_proj.weight"],
-                    param[f"model.layers.{i}.mlp.up_proj.weight"],
-                ],
-                dim=0,
+            gate_up.copy_(
+                torch.cat([param[gate_key], param[up_key]], dim=0)
+                .to(gate_up.dtype)
+                .to(gate_up.device)
             )
-            .to(gate_up.dtype)
-            .to(gate_up.device)
-        )
-        o = model.get_parameter(f"model.layers.{i}.self_attn.o_proj.weight")
-        o.copy_(
-            param[f"model.layers.{i}.self_attn.o_proj.weight"]
-            .to(o.dtype)
-            .to(o.device)
-        )
-        down = model.get_parameter(f"model.layers.{i}.mlp.down_proj.weight")
-        down.copy_(
-            param[f"model.layers.{i}.mlp.down_proj.weight"]
-            .to(down.dtype)
-            .to(down.device)
-        )
-        in_ln = model.get_parameter(f"model.layers.{i}.input_layernorm.weight")
-        in_ln.copy_(
-            param[f"model.layers.{i}.input_layernorm.weight"]
-            .to(in_ln.dtype)
-            .to(in_ln.device)
-        )
-        post_ln = model.get_parameter(
-            f"model.layers.{i}.post_attention_layernorm.weight"
-        )
-        post_ln.copy_(
-            param[f"model.layers.{i}.post_attention_layernorm.weight"]
-            .to(post_ln.dtype)
-            .to(post_ln.device)
-        )
+        down_key = f"model.layers.{i}.mlp.down_proj.weight"
+        if down_key in param:
+            down = model.get_parameter(down_key)
+            down.copy_(param[down_key].to(down.dtype).to(down.device))
 
 
 def load_hf_params_to_vllm(param: Dict, llm: vllm.LLM) -> None:
-    """Load weights from HF transformer model to vLLM model.
-
-    Routes through vLLM's V1 ``apply_model`` when available and falls back
-    to the V0 ``driver_worker.model_runner.model`` path otherwise.
-    """
-    # The HF gemma 4 checkpoint is loaded via Gemma4ForConditionalGeneration,
-    # which nests the text submodule under model.language_model.*. vLLM's
-    # text-only Gemma4ForCausalLM expects model.* (no language_model.
-    # segment), so remap before _copy_weights tries to read those keys.
-    if any("language_model" in k for k in param):
+    """Ship updated MLP weights into the live vLLM engine."""
+    # Restrict to MLP weights and (for gemma 4) strip the multimodal
+    # model.language_model.* prefix so keys match vLLM's text-only
+    # Gemma4ForCausalLM layout.
+    is_gemma4 = any("language_model" in k for k in param)
+    if is_gemma4:
         prefix = "model.language_model."
-        remapped: Dict = {}
+        filtered: Dict = {}
         for k, v in param.items():
             if any(s in k for s in (
                 "vision_tower", "audio_tower", "embed_vision", "embed_audio",
             )):
                 continue
+            if "mlp" not in k:
+                continue
             if k.startswith(prefix):
                 k = "model." + k[len(prefix):]
-            remapped[k] = v
-        param = remapped
+            filtered[k] = v
+        param = filtered
+    else:
+        param = {k: v for k, v in param.items() if "mlp" in k}
 
-    if hasattr(llm, "apply_model"):
-        llm.apply_model(lambda m: _copy_weights(m, param))
+    if not hasattr(llm, "apply_model"):
+        # vLLM v0 path — in-process, no IPC, no size cap.
+        model = llm.llm_engine.model_executor.driver_worker.model_runner.model
+        _copy_weights(model, param)
         return
-    model = llm.llm_engine.model_executor.driver_worker.model_runner.model
-    _copy_weights(model, param)
+
+    # vLLM v1: apply_model ships its callback through an IPC channel
+    # whose msgspec encoder caps any single object at 2**32 - 1 bytes.
+    # Gemma 4 E4B's full text-side MLP set is ~7 GB, so we send one
+    # layer at a time (~200 MB each); each pickled closure stays well
+    # under the cap.
+    layer_re = re.compile(r"model\.layers\.(\d+)\.")
+    by_layer: Dict[int, Dict] = {}
+    for k, v in param.items():
+        m = layer_re.search(k)
+        if m:
+            by_layer.setdefault(int(m.group(1)), {})[k] = v
+    for chunk in by_layer.values():
+        llm.apply_model(lambda m, p=chunk: _copy_weights(m, p))
 
 
 def eval_model(vllm_model, evaluator, ix=None):

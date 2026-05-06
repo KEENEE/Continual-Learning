@@ -147,8 +147,10 @@ def compose_new_params(
 def forward(policy, model, base_params, decomposed_params, learnable_params):
     """Forward pass."""
     new_params = {}
-    for k in base_params:
-        if "mlp" in k:
+    for k, v in base_params.items():
+        # Only the 2-D MLP weight matrices were SVD-decomposed; non-2-D
+        # buffers under mlp.* (e.g. Gemma 4's clip bounds) are untouched.
+        if "mlp" in k and v.ndim >= 2:
             new_params[k] = compose_new_params(
                 policy, k, decomposed_params, learnable_params
             )
@@ -163,9 +165,9 @@ def load_base_params(
     model,
     base_params,
 ):
-    for k in base_params:
-        if "mlp" in k:
-            model.get_parameter(k).copy_(base_params[k].cuda())
+    for k, v in base_params.items():
+        if "mlp" in k and v.ndim >= 2:
+            model.get_parameter(k).copy_(v.cuda())
 
 
 def backward(
@@ -176,7 +178,7 @@ def backward(
     learnable_params,
 ):
     """Backward pass."""
-    keys_to_backprop = [k for k in base_params if "mlp" in k]
+    keys_to_backprop = [k for k, v in base_params.items() if "mlp" in k and v.ndim >= 2]
     last_key = keys_to_backprop[-1]
     for k in keys_to_backprop[:-1]:
         compose_new_params(policy, k, decomposed_params, learnable_params).backward(

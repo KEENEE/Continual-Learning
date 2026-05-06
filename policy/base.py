@@ -18,7 +18,9 @@ class Policy(nn.Module):
         self.max_mult = max_mult
         for k, v in base_params.items():
             # each param initialized with small gaussian noise
-            if "mlp" in k:
+            # ndim>=2 filter excludes Gemma 4's clip-bound buffers
+            # (input_min/max etc.) that share the mlp.* prefix.
+            if "mlp" in k and v.ndim >= 2:
                 self.learnable_params[k] = torch.nn.Parameter(
                     data=(
                         torch.randn(

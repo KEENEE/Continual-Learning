@@ -118,14 +118,23 @@ def main(cfg):
     gpu = torch.device("cuda:1")
     np_random = np.random.RandomState(seed)
 
+    # Gemma 4's checkpoint declares Gemma4ForConditionalGeneration (multimodal),
+    # which AutoModelForCausalLM resolves to and pulls in vision/audio towers we
+    # never use. Load the text-only Gemma4ForCausalLM directly.
+    if "gemma-4" in model_id.lower():
+        from transformers import Gemma4ForCausalLM
+        model_cls = Gemma4ForCausalLM
+    else:
+        model_cls = AutoModelForCausalLM
+
     # GPU + float32 for initial SVD decomposition (cuBLAS-accelerated svd)
     if extract_svd:
-        model = AutoModelForCausalLM.from_pretrained(
+        model = model_cls.from_pretrained(
             model_id, device_map=gpu, torch_dtype=torch.float32
         )
     else:
         # Load model and tokenizer.
-        model = AutoModelForCausalLM.from_pretrained(
+        model = model_cls.from_pretrained(
             model_id, device_map=gpu, torch_dtype=torch.bfloat16
         )
         # Gradient checkpointing trades ~30% compute for ~50-60% activation
@@ -139,7 +148,9 @@ def main(cfg):
     base_params = model.state_dict()
 
     original_model_params = {
-        k: v.clone().detach().cpu() for k, v in base_params.items() if "mlp" in k
+        k: v.clone().detach().cpu()
+        for k, v in base_params.items()
+        if "mlp" in k and v.ndim >= 2
     }
 
     # Load decomposed parameters.
@@ -147,7 +158,10 @@ def main(cfg):
         print("Decomposed params not found. Decomposing on GPU...")
         decomposed_params = {}
         for k, v in base_params.items():
-            if "norm" not in k:
+            # Gemma 4's Gemma4ClippableLinear registers 0-D buffers
+            # (input_min/max, output_min/max) that pass the "norm not in k"
+            # check but aren't 2-D matrices. Require >=2-D explicitly.
+            if "norm" not in k and v.ndim >= 2:
                 print(k)
                 # torch.linalg.svd is faster than the deprecated torch.svd on GPU.
                 # full_matrices=False -> reduced SVD: O(min(m,n)^2 * max(m,n)).

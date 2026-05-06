@@ -73,7 +73,13 @@ def freeze_vllm_model_grads(llm):
             param.requires_grad = False
 
     if hasattr(llm, "apply_model"):
-        llm.apply_model(_freeze)
+        try:
+            llm.apply_model(_freeze)
+        except TypeError:
+            # vLLM v1 runs the engine in a separate process and its
+            # msgpack IPC can't serialize closures. Inference doesn't
+            # backprop, so skipping the freeze is safe.
+            pass
         return
     model = llm.llm_engine.model_executor.driver_worker.model_runner.model
     _freeze(model)

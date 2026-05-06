@@ -171,10 +171,10 @@ def sanitize(
         ).strip()
 
         if new_code != old_code:
-            msg = "Sanitized: " + dbg_identifier
-            if is_folder:
-                msg += " -> " + dbg_identifier.replace(input_path, output_path)
-            logger.info(msg)
+            # msg = "Sanitized: " + dbg_identifier
+            # if is_folder:
+            #     msg += " -> " + dbg_identifier.replace(input_path, output_path)
+            # logger.info(msg)
             nsan += 1
 
         new_solutions.append(

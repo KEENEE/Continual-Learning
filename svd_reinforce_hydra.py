@@ -118,12 +118,17 @@ def main(cfg):
     gpu = torch.device("cuda:1")
     np_random = np.random.RandomState(seed)
 
-    # Gemma 4's checkpoint declares Gemma4ForConditionalGeneration (multimodal),
-    # which AutoModelForCausalLM resolves to and pulls in vision/audio towers we
-    # never use. Load the text-only Gemma4ForCausalLM directly.
-    if "gemma-4" in model_id.lower():
-        from transformers import Gemma4ForCausalLM
-        model_cls = Gemma4ForCausalLM
+    # The Gemma 4 checkpoint was saved from Gemma4ForConditionalGeneration:
+    # the text submodule lives at model.language_model.*. Loading via the
+    # text-only Gemma4ForCausalLM (which expects model.*) silently misses
+    # the prefix, so transformers reports every weight UNEXPECTED/MISSING
+    # and re-initializes the whole model to random — SVD then trips on NaN.
+    # Load the multimodal class so the checkpoint actually populates, then
+    # delete vision/audio submodules below to reclaim VRAM.
+    is_gemma4 = "gemma-4" in model_id.lower()
+    if is_gemma4:
+        from transformers import Gemma4ForConditionalGeneration
+        model_cls = Gemma4ForConditionalGeneration
     else:
         model_cls = AutoModelForCausalLM
 
@@ -144,6 +149,16 @@ def main(cfg):
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": False}
         )
+
+    if is_gemma4:
+        # Drop multimodal towers we never use so they don't end up in
+        # state_dict (would feed vision/audio MLPs into the SVD loop) or
+        # consume VRAM during training.
+        inner = model.model
+        for attr in ("vision_tower", "audio_tower", "embed_vision", "embed_audio"):
+            if getattr(inner, attr, None) is not None:
+                setattr(inner, attr, None)
+        torch.cuda.empty_cache()
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     base_params = model.state_dict()
 

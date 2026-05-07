@@ -1,0 +1,9 @@
+shakeoff_policy:
+  _target_: policy.LoRAPolicy
+  rank: ${lora_rank}
+  alpha: ${lora_alpha}
+
+lora_rank: 16
+lora_alpha: 16
+requires_svd: false
+policy_name: lora_r${lora_rank}_a${lora_alpha}

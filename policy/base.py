@@ -10,6 +10,8 @@ def get_soft_mask(n, fraction):
 
 
 class Policy(nn.Module):
+    requires_svd = True
+
     def __init__(self, base_params, gpu, init_val, max_mult=1, **kwargs):
         # Create learnable parameters.
         super().__init__()
@@ -48,6 +50,18 @@ class Policy(nn.Module):
 
     def get_mask(self, p):
         return torch.sigmoid(p).to(torch.bfloat16) * self.max_mult
+
+    def compose_new_params(self, param_name, decomposed_params, learnable_params):
+        """Compose new weight from SVD decomposition and learnable mask."""
+        mm = self.get_mask(learnable_params[param_name])
+        return (
+            decomposed_params[f"{param_name}.U"]
+            @ torch.diag_embed(decomposed_params[f"{param_name}.S"] * mm)
+            @ decomposed_params[f"{param_name}.V"].T
+        ) * (
+            decomposed_params[f"{param_name}.S"].sum()
+            / (decomposed_params[f"{param_name}.S"] * mm).sum()
+        )
 
     def record_state(self, metrics_to_log):
         pass

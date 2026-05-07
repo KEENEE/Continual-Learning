@@ -78,7 +78,10 @@ def main(cfg):
     model_id = base_model.get_model_id()
     decomposed_param_file = base_model.get_param_file(param_folder_path="")
 
-    extract_svd = cfg.extract_svd or (not os.path.exists(decomposed_param_file))
+    requires_svd = cfg.get("requires_svd", True)
+    extract_svd = requires_svd and (
+        cfg.extract_svd or (not os.path.exists(decomposed_param_file))
+    )
 
     has_training_split = task_loader.has_training_split
     has_transfer_split = task_loader.has_transfer_split
@@ -168,33 +171,36 @@ def main(cfg):
         if "norm" not in k and "embed" not in k and v.ndim >= 2
     }
 
-    # Load decomposed parameters.
-    if not os.path.exists(decomposed_param_file):
-        print("Decomposed params not found. Decomposing on GPU...")
-        decomposed_params = {}
-        for k, v in base_params.items():
-            # Decompose all 2-D weight matrices except normalization
-            # and embedding parameters.  ndim >= 2 also excludes
-            # Gemma 4's 0-D clip-bound buffers (input_min/max etc.).
-            if "norm" not in k and "embed" not in k and v.ndim >= 2:
-                print(k)
-                # torch.linalg.svd is faster than the deprecated torch.svd on GPU.
-                # full_matrices=False -> reduced SVD: O(min(m,n)^2 * max(m,n)).
-                U, S, Vh = torch.linalg.svd(v, full_matrices=False)
-                decomposed_params[f"{k}.U"] = U.to(torch.bfloat16).cpu()
-                decomposed_params[f"{k}.S"] = S.to(torch.bfloat16).cpu()
-                decomposed_params[f"{k}.V"] = Vh.transpose(-2, -1).to(torch.bfloat16).cpu()
-        torch.save(decomposed_params, decomposed_param_file)
-        print("successfully decomposed model - returning")
-        return
-    elif extract_svd:
-        print(f"ERROR: SVD file already exists at {decomposed_param_file}")
+    # Load decomposed parameters (only needed for SVD-based tuning).
+    if requires_svd:
+        if not os.path.exists(decomposed_param_file):
+            print("Decomposed params not found. Decomposing on GPU...")
+            decomposed_params = {}
+            for k, v in base_params.items():
+                # Decompose all 2-D weight matrices except normalization
+                # and embedding parameters.  ndim >= 2 also excludes
+                # Gemma 4's 0-D clip-bound buffers (input_min/max etc.).
+                if "norm" not in k and "embed" not in k and v.ndim >= 2:
+                    print(k)
+                    # torch.linalg.svd is faster than the deprecated torch.svd on GPU.
+                    # full_matrices=False -> reduced SVD: O(min(m,n)^2 * max(m,n)).
+                    U, S, Vh = torch.linalg.svd(v, full_matrices=False)
+                    decomposed_params[f"{k}.U"] = U.to(torch.bfloat16).cpu()
+                    decomposed_params[f"{k}.S"] = S.to(torch.bfloat16).cpu()
+                    decomposed_params[f"{k}.V"] = Vh.transpose(-2, -1).to(torch.bfloat16).cpu()
+            torch.save(decomposed_params, decomposed_param_file)
+            print("successfully decomposed model - returning")
+            return
+        elif extract_svd:
+            print(f"ERROR: SVD file already exists at {decomposed_param_file}")
+        else:
+            print("Decomposed params found. Loading...")
+            assert not extract_svd
+            decomposed_params = torch.load(decomposed_param_file)
+        for k, v in decomposed_params.items():
+            decomposed_params[k] = v.to(torch.bfloat16).to(gpu)
     else:
-        print("Decomposed params found. Loading...")
-        assert not extract_svd
-        decomposed_params = torch.load(decomposed_param_file)
-    for k, v in decomposed_params.items():
-        decomposed_params[k] = v.to(torch.bfloat16).to(gpu)
+        decomposed_params = {}
 
     if cfg.wandb_log:
         wandb = wandb_init(
@@ -207,6 +213,8 @@ def main(cfg):
         decomposed_params=decomposed_params,
         gpu=gpu,
     )
+    if hasattr(policy, "set_base_weights"):
+        policy.set_base_weights(base_params)
 
     optimization_algorithm: OptimizationAlgorithm = hydra.utils.instantiate(
         cfg.optimization_algorithm,

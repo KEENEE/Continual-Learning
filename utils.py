@@ -142,16 +142,8 @@ def compose_new_params(
     decomposed_params,
     learnable_params,
 ):
-    """Compose new parameters from decomposed parameters."""
-    mm = policy.get_mask(learnable_params[param_name])
-    return (
-        decomposed_params[f"{param_name}.U"]
-        @ torch.diag_embed(decomposed_params[f"{param_name}.S"] * mm)
-        @ decomposed_params[f"{param_name}.V"].T
-    ) * (
-        decomposed_params[f"{param_name}.S"].sum()
-        / (decomposed_params[f"{param_name}.S"] * mm).sum()
-    )
+    """Compose new parameters — delegates to policy.compose_new_params."""
+    return policy.compose_new_params(param_name, decomposed_params, learnable_params)
 
 
 @torch.no_grad()

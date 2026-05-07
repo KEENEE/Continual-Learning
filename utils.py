@@ -21,22 +21,50 @@ def _try_get_parameter(model, name: str):
 
 
 def _copy_weights(model, param: Dict) -> None:
-    """Copy MLP weights from a (possibly partial) HF state-dict into a
-    live vLLM nn.Module.
+    """Copy SVD-decomposed weights from a (possibly partial) HF
+    state-dict into a live vLLM nn.Module.
 
-    Only mlp.{gate,up,down}_proj.weight ever changes during training;
-    every other tensor stays at the values vLLM already loaded at
-    startup, so we don't re-copy them. Tolerates partial dicts so callers
-    can ship one layer per IPC call.
-
-    Assumes vLLM packs gate+up into gate_up_proj — both Llama 3 and
-    gemma 4 dense use that layout in vLLM.
+    Handles the packing conventions used by vLLM:
+      - q/k/v_proj → qkv_proj   (attention)
+      - gate/up_proj → gate_up_proj  (MLP)
+    Tolerates partial dicts so callers can ship one layer per IPC call.
     """
     config = getattr(model, "config", None)
     text_config = getattr(config, "text_config", config)
     num_layers = text_config.num_hidden_layers
 
+    # lm_head (may be tied with embed_tokens and absent)
+    if "lm_head.weight" in param:
+        lm_head = _try_get_parameter(model, "lm_head.weight")
+        if lm_head is not None:
+            lm_head.copy_(
+                param["lm_head.weight"][: lm_head.shape[0]]
+                .to(lm_head.dtype)
+                .to(lm_head.device)
+            )
+
     for i in range(num_layers):
+        # --- Attention ---
+        q_key = f"model.layers.{i}.self_attn.q_proj.weight"
+        k_key = f"model.layers.{i}.self_attn.k_proj.weight"
+        v_key = f"model.layers.{i}.self_attn.v_proj.weight"
+        if q_key in param and k_key in param and v_key in param:
+            qkv = model.get_parameter(
+                f"model.layers.{i}.self_attn.qkv_proj.weight"
+            )
+            qkv.copy_(
+                torch.cat(
+                    [param[q_key], param[k_key], param[v_key]], dim=0
+                )
+                .to(qkv.dtype)
+                .to(qkv.device)
+            )
+        o_key = f"model.layers.{i}.self_attn.o_proj.weight"
+        if o_key in param:
+            o = model.get_parameter(o_key)
+            o.copy_(param[o_key].to(o.dtype).to(o.device))
+
+        # --- MLP ---
         gate_key = f"model.layers.{i}.mlp.gate_proj.weight"
         up_key = f"model.layers.{i}.mlp.up_proj.weight"
         if gate_key in param and up_key in param:
@@ -55,10 +83,10 @@ def _copy_weights(model, param: Dict) -> None:
 
 
 def load_hf_params_to_vllm(param: Dict, llm: vllm.LLM) -> None:
-    """Ship updated MLP weights into the live vLLM engine."""
-    # Restrict to MLP weights and (for gemma 4) strip the multimodal
-    # model.language_model.* prefix so keys match vLLM's text-only
-    # Gemma4ForCausalLM layout.
+    """Ship updated weights into the live vLLM engine."""
+    # Filter to SVD-decomposed weights only and (for gemma 4) strip the
+    # multimodal model.language_model.* prefix so keys match vLLM's
+    # text-only Gemma4ForCausalLM layout.
     is_gemma4 = any("language_model" in k for k in param)
     if is_gemma4:
         prefix = "model.language_model."
@@ -68,14 +96,15 @@ def load_hf_params_to_vllm(param: Dict, llm: vllm.LLM) -> None:
                 "vision_tower", "audio_tower", "embed_vision", "embed_audio",
             )):
                 continue
-            if "mlp" not in k:
+            if "norm" in k or "embed" in k or v.ndim < 2:
                 continue
             if k.startswith(prefix):
                 k = "model." + k[len(prefix):]
             filtered[k] = v
         param = filtered
     else:
-        param = {k: v for k, v in param.items() if "mlp" in k}
+        param = {k: v for k, v in param.items()
+                 if "norm" not in k and "embed" not in k and v.ndim >= 2}
 
     if not hasattr(llm, "apply_model"):
         # vLLM v0 path — in-process, no IPC, no size cap.
@@ -85,15 +114,19 @@ def load_hf_params_to_vllm(param: Dict, llm: vllm.LLM) -> None:
 
     # vLLM v1: apply_model ships its callback through an IPC channel
     # whose msgspec encoder caps any single object at 2**32 - 1 bytes.
-    # Gemma 4 E4B's full text-side MLP set is ~7 GB, so we send one
-    # layer at a time (~200 MB each); each pickled closure stays well
-    # under the cap.
+    # Send one layer at a time; non-layer weights (e.g. lm_head) go in
+    # a separate chunk.
     layer_re = re.compile(r"model\.layers\.(\d+)\.")
     by_layer: Dict[int, Dict] = {}
+    non_layer: Dict = {}
     for k, v in param.items():
         m = layer_re.search(k)
         if m:
             by_layer.setdefault(int(m.group(1)), {})[k] = v
+        else:
+            non_layer[k] = v
+    if non_layer:
+        llm.apply_model(lambda m, p=non_layer: _copy_weights(m, p))
     for chunk in by_layer.values():
         llm.apply_model(lambda m, p=chunk: _copy_weights(m, p))
 
@@ -126,9 +159,7 @@ def forward(policy, model, base_params, decomposed_params, learnable_params):
     """Forward pass."""
     new_params = {}
     for k, v in base_params.items():
-        # Only the 2-D MLP weight matrices were SVD-decomposed; non-2-D
-        # buffers under mlp.* (e.g. Gemma 4's clip bounds) are untouched.
-        if "mlp" in k and v.ndim >= 2:
+        if "norm" not in k and "embed" not in k and v.ndim >= 2:
             new_params[k] = compose_new_params(
                 policy, k, decomposed_params, learnable_params
             )
@@ -144,7 +175,7 @@ def load_base_params(
     base_params,
 ):
     for k, v in base_params.items():
-        if "mlp" in k and v.ndim >= 2:
+        if "norm" not in k and "embed" not in k and v.ndim >= 2:
             model.get_parameter(k).copy_(v.cuda())
 
 
@@ -156,7 +187,7 @@ def backward(
     learnable_params,
 ):
     """Backward pass."""
-    keys_to_backprop = [k for k, v in base_params.items() if "mlp" in k and v.ndim >= 2]
+    keys_to_backprop = [k for k, v in base_params.items() if "norm" not in k and "embed" not in k and v.ndim >= 2]
     last_key = keys_to_backprop[-1]
     for k in keys_to_backprop[:-1]:
         compose_new_params(policy, k, decomposed_params, learnable_params).backward(

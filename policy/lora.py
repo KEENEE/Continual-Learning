@@ -40,9 +40,14 @@ class LoRAPolicy(nn.Module):
         self._base_weights = {}
 
     def set_base_weights(self, base_params):
-        """Store references to base weights for composition."""
+        """Store cloned base weights for composition.
+
+        model.state_dict() returns references to parameter storage;
+        forward() overwrites those in-place via .copy_(), so we must
+        clone to keep the original base weights intact.
+        """
         self._base_weights = {
-            k: v for k, v in base_params.items() if k in self._key_to_safe
+            k: v.clone() for k, v in base_params.items() if k in self._key_to_safe
         }
 
     def get_learnable_params(self, detach=False):

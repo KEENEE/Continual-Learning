@@ -7,6 +7,5 @@ shakeoff_policy:
 lora_rank: 16
 lora_alpha: 32
 lora_dropout: 0.05
-lr: 5e-5
 requires_svd: false
 policy_name: lora_r${lora_rank}_a${lora_alpha}

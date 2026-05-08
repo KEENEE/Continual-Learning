@@ -16,4 +16,5 @@ CUDA_VISIBLE_DEVICES=0,1 VLLM_ALLOW_INSECURE_SERIALIZATION=1 python svd_reinforc
     task@_global_=$TASK \
     mode@_global_=training \
     num_iters=$NUM_ITERS \
+    lr=5e-5 \
     "$@"

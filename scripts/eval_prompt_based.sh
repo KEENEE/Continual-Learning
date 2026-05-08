@@ -22,4 +22,5 @@ CUDA_VISIBLE_DEVICES=0,1 python svd_reinforce_hydra.py \
     experts_path_dict.code=$CODE_EXPERT_PATH \
     experts_path_dict.math=$MATH_EXPERT_PATH \
     experts_path_dict.reasoning=$REASONING_EXPERT_PATH \
-    load_ckpt=$CLS_EXPERT_PATH
+    load_ckpt=$CLS_EXPERT_PATH \
+    "$@"

@@ -20,4 +20,5 @@ CUDA_VISIBLE_DEVICES=0,1 python svd_reinforce_hydra.py \
     task@_global_=$TASK \
     norm_coeffs=$NORM_COEFFS \
     wandb_log=true \
-    num_iters=50
+    num_iters=50 \
+    "$@"

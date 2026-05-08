@@ -16,4 +16,5 @@ CUDA_VISIBLE_DEVICES=0,1 python svd_reinforce_hydra.py \
     mode@_global_=training \
     num_iters=$NUM_ITERS \
     batch_size=$BATCH_SIZE \
-    test_only=false
+    test_only=false \
+    "$@"

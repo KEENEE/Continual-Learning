@@ -2,8 +2,11 @@ shakeoff_policy:
   _target_: policy.LoRAPolicy
   rank: ${lora_rank}
   alpha: ${lora_alpha}
+  dropout: ${lora_dropout}
 
 lora_rank: 16
-lora_alpha: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lr: 5e-5
 requires_svd: false
 policy_name: lora_r${lora_rank}_a${lora_alpha}

@@ -7,11 +7,12 @@ import torch.nn as nn
 class LoRAPolicy(nn.Module):
     requires_svd = False
 
-    def __init__(self, base_params, gpu, rank=16, alpha=16, **kwargs):
+    def __init__(self, base_params, gpu, rank=16, alpha=32, dropout=0.05, **kwargs):
         super().__init__()
         self.rank = rank
         self.alpha = alpha
         self.scaling = alpha / rank
+        self.dropout = nn.Dropout(p=dropout) if dropout > 0 else nn.Identity()
 
         self.lora_A = nn.ParameterDict()
         self.lora_B = nn.ParameterDict()
@@ -33,7 +34,7 @@ class LoRAPolicy(nn.Module):
 
                 self.num_params += A.numel() + B.numel()
 
-        print(f"LoRA #params={self.num_params} (rank={rank}, alpha={alpha})")
+        print(f"LoRA #params={self.num_params} (rank={rank}, alpha={alpha}, dropout={dropout})")
         self.trainable_params = list(self.lora_A.values()) + list(self.lora_B.values())
         self._key_to_safe = {k: k.replace(".", "_") for k in self.decomposable_keys}
         self._base_weights = {}
@@ -55,7 +56,7 @@ class LoRAPolicy(nn.Module):
         safe = self._key_to_safe[param_name]
         A = self.lora_A[safe]
         B = self.lora_B[safe]
-        return self._base_weights[param_name] + self.scaling * (B @ A)
+        return self._base_weights[param_name] + self.scaling * (B @ self.dropout(A))
 
     def set_trainable_params_values(self, new_values):
         with torch.no_grad():

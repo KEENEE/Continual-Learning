@@ -13,7 +13,7 @@ export WANDB_MODE=disabled
 export USE_FASTSAFETENSOR=true
 export VLLM_ALLOW_INSECURE_SERIALIZATION=1
 
-CUDA_VISIBLE_DEVICES=0,1 python svd_reinforce_hydra.py \
+CUDA_VISIBLE_DEVICES=2,3 python svd_reinforce_hydra.py \
     base_model@_global_=$BASE_MODEL \
     task@_global_=user_behavior \
     optimization@_global_=$OPTIM \

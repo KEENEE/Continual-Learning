@@ -45,6 +45,7 @@ class UserBehaviorTask(Task):
         embed_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
         max_model_len: Optional[int] = None,
         max_tokens: Optional[int] = None,
+        train_max_len: Optional[int] = None,
     ):
         # Chat template: same Llama3-style template for the two Llama models;
         # Gemma falls back to the tokenizer default.
@@ -67,6 +68,10 @@ class UserBehaviorTask(Task):
         self.embed_model_name = embed_model
         self.max_model_len = max_model_len
         self.max_tokens = max_tokens
+        # Optional cap on (prompt + gold) tokens for the HF training forward.
+        # Default None means "use the model's full context"; set this via
+        # hydra (task.train_max_len=N) only if the training GPU OOMs.
+        self.train_max_len = train_max_len
 
         self.train_samples, self.valid_samples, self.test_samples = self._load(
             samples_path

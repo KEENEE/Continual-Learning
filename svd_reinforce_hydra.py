@@ -139,9 +139,30 @@ def main(cfg):
         )
     else:
         # Load model and tokenizer.
-        model = model_cls.from_pretrained(
-            model_id, device_map=gpu, torch_dtype=torch.bfloat16
-        )
+        # Try flash_attention_2 first: SDPA materializes a [1, H, T, T] scores
+        # tensor per attention layer, which OOMs on long Gemma-4 prompts even
+        # with gradient checkpointing. Flash-attn 2 uses an online-softmax
+        # kernel that never materializes that tensor. Fall back to SDPA if
+        # flash-attn isn't installed or the model class doesn't support it.
+        try:
+            model = model_cls.from_pretrained(
+                model_id,
+                device_map=gpu,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="flash_attention_2",
+            )
+            print("[attn] using flash_attention_2")
+        except (ImportError, ValueError) as e:
+            print(
+                f"[attn] flash_attention_2 unavailable ({type(e).__name__}: {e}); "
+                "falling back to sdpa"
+            )
+            model = model_cls.from_pretrained(
+                model_id,
+                device_map=gpu,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="sdpa",
+            )
         # Gradient checkpointing trades ~30% compute for ~50-60% activation
         # memory savings during backward — required for long-context training
         # (e.g., user_behavior 7K-token prompts) on a single 80GB GPU.

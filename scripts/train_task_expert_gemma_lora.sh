@@ -10,7 +10,7 @@ NUM_ITERS=200
 # VLLM_ALLOW_INSECURE_SERIALIZATION=1 lets vLLM v1's IPC pickle the
 # closures we use to push weights into the engine (apply_model passes
 # a lambda + tensor dict; default msgpack can't encode either).
-CUDA_VISIBLE_DEVICES=0,1 VLLM_ALLOW_INSECURE_SERIALIZATION=1 USE_FASTSAFETENSOR=true python svd_reinforce_hydra.py \
+HF_HOME=/group-volume/mjkwon/cache/huggingface CUDA_VISIBLE_DEVICES=0,1 VLLM_ALLOW_INSECURE_SERIALIZATION=1 USE_FASTSAFETENSOR=true python svd_reinforce_hydra.py \
     base_model@_global_=gemma4e4bi \
     policy@_global_=lora \
     task@_global_=$TASK \

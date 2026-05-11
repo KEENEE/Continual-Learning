@@ -57,7 +57,13 @@ class LoRAPolicy(nn.Module):
         return p
 
     def compose_new_params(self, param_name, decomposed_params, learnable_params):
-        """Compose new weight as base_weight + scaling * B @ A."""
+        """Compose new weight as base_weight + scaling * B @ A.
+
+        Dropout is only applied when training (i.e. during backward pass
+        graph construction). During forward/inference the policy should be
+        in eval mode so dropout is identity — this ensures the weights used
+        for generation match what backward differentiates through.
+        """
         safe = self._key_to_safe[param_name]
         A = self.lora_A[safe]
         B = self.lora_B[safe]

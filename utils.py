@@ -149,6 +149,7 @@ def compose_new_params(
 @torch.no_grad()
 def forward(policy, model, base_params, decomposed_params, learnable_params):
     """Forward pass."""
+    policy.eval()
     new_params = {}
     for k, v in base_params.items():
         if "norm" not in k and "embed" not in k and v.ndim >= 2:
@@ -158,6 +159,7 @@ def forward(policy, model, base_params, decomposed_params, learnable_params):
             model.get_parameter(k).copy_(new_params[k])
         else:
             new_params[k] = base_params[k]
+    policy.train()
     return new_params
 
 

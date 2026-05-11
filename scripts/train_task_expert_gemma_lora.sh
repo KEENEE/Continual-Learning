@@ -17,4 +17,5 @@ CUDA_VISIBLE_DEVICES=0,1 VLLM_ALLOW_INSECURE_SERIALIZATION=1 USE_FASTSAFETENSOR=
     mode@_global_=training \
     num_iters=$NUM_ITERS \
     lr=5e-5 \
+    max_grad_norm=1.0 \
     "$@"

@@ -5,6 +5,7 @@ from typing import Optional
 
 import vllm
 from fishfarm.models.vllm_model import VLLMModel
+from transformers import AutoConfig
 
 from .base import LLAMA3_COT, Task, freeze_vllm_model_grads, get_download_dir
 from .user_behavior_eval import UserBehaviorEvaluator
@@ -51,7 +52,7 @@ class UserBehaviorTask(Task):
         self.model_to_template = {
             "meta-llama/Meta-Llama-3-8B-Instruct": llama_tpl,
             "meta-llama/Meta-Llama-3.1-8B-Instruct": llama_tpl,
-            "google/gemma-4-E4B": None,
+            "google/gemma-4-E4B-it": None,
         }
         self.system_msg = SYSTEM_MSG
         self.target_metric_train = "sem_acc"
@@ -133,10 +134,16 @@ class UserBehaviorTask(Task):
             return f"{sample.gold_reasoning}\nNext action: {sample.gold_answer}"
         return sample.gold_answer
 
+    def _resolve_max_model_len(self, model_id):
+        if self.max_model_len is not None:
+            return self.max_model_len
+        cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+        # Multimodal configs (e.g. Gemma 4) nest the text settings under text_config.
+        text_cfg = getattr(cfg, "text_config", None) or cfg
+        return int(getattr(text_cfg, "max_position_embeddings"))
+
     def get_vllm_model(self, model_id, tensor_parallel_size=1):
-        max_model_len = self.max_model_len or (
-            8192 if "Llama-3-8B" in model_id else 16384
-        )
+        max_model_len = self._resolve_max_model_len(model_id)
         max_tokens = self.max_tokens or (256 if self.use_reasoning_in_target else 64)
         # Gemma 4 checkpoints declare Gemma4ForConditionalGeneration (multimodal)
         # in config.json. Force the text-only Gemma4ForCausalLM path so vLLM does

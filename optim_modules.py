@@ -636,18 +636,33 @@ class SupervisedSFT(OptimizationAlgorithm, nn.Module):
         ]
         golds = [task_loader.get_gold_target(train_data[i]) for i in batch_ix]
         B = len(prompts)
+        # Per-task training-time sequence cap. Long prompts blow up the
+        # [1, T, V] logits tensor (Gemma-4's vocab is ~256K); skipping samples
+        # that exceed the cap keeps the SFT step within a single 80GB GPU.
+        train_max_len = getattr(task_loader, "train_max_len", None)
 
         for prompt, gold in zip(prompts, golds):
             in_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(gpu)
             full_text = prompt + " " + gold + (tokenizer.eos_token or "")
             full_ids = tokenizer(full_text, return_tensors="pt").input_ids.to(gpu)
             P = in_ids.shape[-1]
+            if train_max_len is not None and full_ids.shape[-1] > train_max_len:
+                print(
+                    f"[SFT] skipping sample: len={full_ids.shape[-1]} "
+                    f"> train_max_len={train_max_len}"
+                )
+                continue
             outputs = model(full_ids)
-            logits = outputs.logits[:, P - 1 : -1]
-            log_probs = F.log_softmax(logits, dim=-1)
-            target_ids = full_ids[:, P:]
-            tok_lp = log_probs.gather(2, target_ids.unsqueeze(-1)).squeeze(-1)
-            loss = -(tok_lp.sum() / B)
+            # Predict tokens [P, T-1] from logits at positions [P-1, T-2].
+            shift_logits = outputs.logits[:, P - 1 : -1].contiguous()
+            target_ids = full_ids[:, P:].contiguous()
+            # Fused cross-entropy avoids materializing a second [1, T, V]
+            # log_softmax tensor (Gemma's 256K vocab makes this dominant).
+            loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                target_ids.view(-1),
+                reduction="sum",
+            ) / B
             loss.backward()
             metrics_to_log.update(sft_loss=loss.item())
         backward(policy, model, base_params, decomposed_params, learnable_params)

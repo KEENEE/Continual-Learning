@@ -144,14 +144,13 @@ def compose_new_params(
 ):
     """Compose new parameters from decomposed parameters."""
     mm = policy.get_mask(learnable_params[param_name])
-    return (
-        decomposed_params[f"{param_name}.U"]
-        @ torch.diag_embed(decomposed_params[f"{param_name}.S"] * mm)
-        @ decomposed_params[f"{param_name}.V"].T
-    ) * (
-        decomposed_params[f"{param_name}.S"].sum()
-        / (decomposed_params[f"{param_name}.S"] * mm).sum()
-    )
+    S = decomposed_params[f"{param_name}.S"]
+    U = decomposed_params[f"{param_name}.U"]
+    V = decomposed_params[f"{param_name}.V"]
+    s_masked = S * mm
+    # U @ diag(s_masked) @ V.T is equivalent to (U * s_masked) @ V.T but
+    # avoids materializing the [k, k] dense diagonal tensor for every layer.
+    return ((U * s_masked) @ V.T) * (S.sum() / s_masked.sum())
 
 
 @torch.no_grad()

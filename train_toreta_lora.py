@@ -97,8 +97,16 @@ def apply_lora(model, args):
 def merge_and_push_to_vllm(peft_model, vllm_model):
     """Merge LoRA into base weights, push to vLLM, then unmerge."""
     peft_model.merge_adapter()
-    # Get the underlying model's state_dict (without PEFT wrapper keys)
-    state_dict = peft_model.base_model.model.state_dict()
+    # PEFT renames keys: "q_proj.weight" → "q_proj.base_layer.weight".
+    # Strip ".base_layer." so load_hf_params_to_vllm can match them,
+    # and skip lora_A/lora_B keys.
+    raw_sd = peft_model.base_model.model.state_dict()
+    state_dict = {}
+    for k, v in raw_sd.items():
+        if "lora_" in k:
+            continue
+        k = k.replace(".base_layer.", ".")
+        state_dict[k] = v
     load_hf_params_to_vllm(state_dict, vllm_model.llm)
     peft_model.unmerge_adapter()
 
@@ -200,10 +208,18 @@ def train_step(
         metrics.update(pg=pg_loss.item(), loss=loss.item())
 
     # 7. Clip and step
-    torch.nn.utils.clip_grad_norm_(
-        [p for p in peft_model.parameters() if p.requires_grad],
-        args.max_grad_norm,
-    )
+    trainable = [p for p in peft_model.parameters() if p.requires_grad]
+    torch.nn.utils.clip_grad_norm_(trainable, args.max_grad_norm)
+
+    # Log gradient stats before zero_grad clears them
+    with torch.no_grad():
+        grad_mags = [
+            torch.linalg.vector_norm(p.grad).item()
+            for p in trainable if p.grad is not None
+        ]
+        if grad_mags:
+            metrics.update(**get_mean_std_max_min_dict(grad_mags, "grad_mags"))
+
     optimizer.step()
     optimizer.zero_grad()
 
@@ -307,18 +323,11 @@ def main():
         gc.collect()
         torch.cuda.empty_cache()
 
-        # Log gradient stats
+        # Log param magnitudes
         with torch.no_grad():
-            grad_mags = []
-            param_mags = []
-            for p in trainable_params:
-                if p.grad is not None:
-                    grad_mags.append(torch.linalg.vector_norm(p.grad).item())
-                param_mags.append(torch.linalg.vector_norm(p).item())
-            if grad_mags:
-                metrics.update(
-                    **get_mean_std_max_min_dict(grad_mags, "grad_mags")
-                )
+            param_mags = [
+                torch.linalg.vector_norm(p).item() for p in trainable_params
+            ]
             metrics.update(
                 **get_mean_std_max_min_dict(param_mags, "param_mags")
             )

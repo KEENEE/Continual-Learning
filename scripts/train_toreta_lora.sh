@@ -23,5 +23,4 @@ python train_toreta_lora.py \
     --lora_alpha 32 \
     --lora_dropout 0.05 \
     --test_interval 5 \
-    --wandb_log \
     "${@:3}"

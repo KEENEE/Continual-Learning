@@ -139,30 +139,9 @@ def main(cfg):
         )
     else:
         # Load model and tokenizer.
-        # Try flash_attention_2 first: SDPA materializes a [1, H, T, T] scores
-        # tensor per attention layer, which OOMs on long Gemma-4 prompts even
-        # with gradient checkpointing. Flash-attn 2 uses an online-softmax
-        # kernel that never materializes that tensor. Fall back to SDPA if
-        # flash-attn isn't installed or the model class doesn't support it.
-        try:
-            model = model_cls.from_pretrained(
-                model_id,
-                device_map=gpu,
-                torch_dtype=torch.bfloat16,
-                attn_implementation="flash_attention_2",
-            )
-            print("[attn] using flash_attention_2")
-        except (ImportError, ValueError) as e:
-            print(
-                f"[attn] flash_attention_2 unavailable ({type(e).__name__}: {e}); "
-                "falling back to sdpa"
-            )
-            model = model_cls.from_pretrained(
-                model_id,
-                device_map=gpu,
-                torch_dtype=torch.bfloat16,
-                attn_implementation="sdpa",
-            )
+        model = model_cls.from_pretrained(
+            model_id, device_map=gpu, torch_dtype=torch.bfloat16
+        )
         # Gradient checkpointing trades ~30% compute for ~50-60% activation
         # memory savings during backward — required for long-context training
         # (e.g., user_behavior 7K-token prompts) on a single 80GB GPU.
@@ -189,12 +168,6 @@ def main(cfg):
         if "norm" not in k and "embed" not in k and v.ndim >= 2
     }
 
-    # Multimodal submodules (Gemma 4 vision/audio) are nulled above, but
-    # checkpoints decomposed before that change may still contain them on
-    # disk. Skip them everywhere so they don't sit in GPU memory unused.
-    def _is_multimodal_key(name):
-        return "vision" in name or "audio" in name
-
     # Load decomposed parameters.
     if not os.path.exists(decomposed_param_file):
         print("Decomposed params not found. Decomposing on GPU...")
@@ -203,12 +176,7 @@ def main(cfg):
             # Decompose all 2-D weight matrices except normalization
             # and embedding parameters.  ndim >= 2 also excludes
             # Gemma 4's 0-D clip-bound buffers (input_min/max etc.).
-            if (
-                "norm" not in k
-                and "embed" not in k
-                and not _is_multimodal_key(k)
-                and v.ndim >= 2
-            ):
+            if "norm" not in k and "embed" not in k and v.ndim >= 2:
                 print(k)
                 # torch.linalg.svd is faster than the deprecated torch.svd on GPU.
                 # full_matrices=False -> reduced SVD: O(min(m,n)^2 * max(m,n)).
@@ -225,12 +193,8 @@ def main(cfg):
         print("Decomposed params found. Loading...")
         assert not extract_svd
         decomposed_params = torch.load(decomposed_param_file)
-    for k in list(decomposed_params.keys()):
-        if _is_multimodal_key(k):
-            decomposed_params.pop(k)
-            continue
-        decomposed_params[k] = decomposed_params[k].to(torch.bfloat16).to(gpu)
-    torch.cuda.empty_cache()
+    for k, v in decomposed_params.items():
+        decomposed_params[k] = v.to(torch.bfloat16).to(gpu)
 
     if cfg.wandb_log:
         wandb = wandb_init(
@@ -433,12 +397,6 @@ def main(cfg):
             metrics_to_log=metrics_to_log,
             vllm_model=vllm_model,
         )
-
-        if i == 0:
-            # One-shot memory diagnostic after the first SFT/RL step lands the
-            # first .grad buffers. Helps localize fixed-size allocations that
-            # OOM independently of prompt length.
-            print(torch.cuda.memory_summary(device=gpu, abbreviated=True))
 
         with torch.no_grad():
             lists_to_log = {}

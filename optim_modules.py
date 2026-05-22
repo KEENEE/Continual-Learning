@@ -641,22 +641,14 @@ class SupervisedSFT(OptimizationAlgorithm, nn.Module):
         # that exceed the cap keeps the SFT step within a single 80GB GPU.
         train_max_len = getattr(task_loader, "train_max_len", None)
 
-        debug_lengths = not getattr(self, "_lengths_logged", False)
-        if debug_lengths:
-            self._lengths_logged = True
-            print(f"[SFT] first-step batch_ix={list(batch_ix)}")
-
         for prompt, gold in zip(prompts, golds):
             in_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(gpu)
             full_text = prompt + " " + gold + (tokenizer.eos_token or "")
             full_ids = tokenizer(full_text, return_tensors="pt").input_ids.to(gpu)
             P = in_ids.shape[-1]
-            T = full_ids.shape[-1]
-            if debug_lengths:
-                print(f"[SFT] sample prompt_tokens={P} full_tokens={T}")
-            if train_max_len is not None and T > train_max_len:
+            if train_max_len is not None and full_ids.shape[-1] > train_max_len:
                 print(
-                    f"[SFT] skipping sample: len={T} "
+                    f"[SFT] skipping sample: len={full_ids.shape[-1]} "
                     f"> train_max_len={train_max_len}"
                 )
                 continue
